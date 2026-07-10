@@ -23,23 +23,41 @@ returns structured, auditable decisions.
 
 *(Regenerate this GIF with `vhs docs/demo.tape` — see [charmbracelet/vhs](https://github.com/charmbracelet/vhs).)*
 
-## Try it in 60 seconds (no network, no API keys)
+## Fastest path: just Docker (nothing else to install)
+
+No Python, no venv, no PEP 668 headaches — if you have Docker, you have
+everything:
 
 ```bash
 git clone https://github.com/d01ki/patchtriage && cd patchtriage
-pip install -e .
-patchtriage demo          # then open demo_report.html in a browser
+docker compose up gui            # builds the image, starts the web console
+# then open http://localhost:8765
+```
+
+That launches the **web console**: register your systems as targets, import a
+scan or SBOM per target from the browser, and run triage — no local scanner
+or API key required (SBOMs are resolved online via OSV.dev). `Ctrl-C` stops
+it; `docker compose up -d gui` runs it in the background. Registered targets
+and reports persist across restarts.
+
+Just want the offline demo?
+
+```bash
+docker compose run --rm demo     # report appears in ./out/demo_report.html
+```
+
+### Or install locally (Python 3.10+)
+
+```bash
+pip install -e .            # in a venv; on Debian/Ubuntu: python3 -m venv .venv first
+patchtriage demo           # offline demo -> demo_report.html
+patchtriage serve          # the same web console, natively
 ```
 
 The demo ships with real Trivy/Grype output samples and offline snapshots of
 EPSS / CISA KEV / NVD data, so the entire pipeline — ingest, dedup, context,
 enrichment, triage, planning, HTML dashboard, and the built-in evaluation —
-runs air-gapped. Prefer containers?
-
-```bash
-docker compose run --rm demo     # report appears in ./out/demo_report.html
-# or: make docker-demo
-```
+runs air-gapped.
 
 ## The usage flow
 

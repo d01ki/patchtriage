@@ -151,6 +151,22 @@ pip install -e ".[ai]"    # + Anthropic backend
 pip install -e ".[dev]"   # + pytest
 ```
 
+## Interactive setup & guided run
+
+No flags to memorize — two commands walk you through everything:
+
+```bash
+patchtriage setup    # asks for your API keys one by one, validates the
+                     # Anthropic key live (no tokens spent), lets you pick a
+                     # default backend, saves to ~/.config/patchtriage/
+patchtriage start    # asks what to triage (path/glob), asset context,
+                     # backend, output paths - then runs and opens the report
+```
+
+Keys entered in `setup` are stored locally (0600) and exported for every
+later command; environment variables always take precedence, so CI and
+containers are unaffected.
+
 ## Usage
 
 ```bash
@@ -160,8 +176,7 @@ patchtriage run trivy.json grype.json --exposed --criticality high -o report.jso
 # Skip NVD for speed (EPSS + KEV only)
 patchtriage run trivy.json --no-nvd
 
-# Frontier-AI triage (requires ANTHROPIC_API_KEY)
-export ANTHROPIC_API_KEY=sk-ant-...
+# Frontier-AI triage (key from `patchtriage setup` or ANTHROPIC_API_KEY)
 patchtriage run trivy.json grype.json --triage claude --limit 50
 
 # Cascade: screen everything with Haiku, escalate only what matters to Opus
@@ -258,7 +273,23 @@ so every decision is auditable against the signals it was made from.
 
 `benchmarks/run_benchmark.sh` reproduces the practicality evaluation against
 five widely used public container images (pinned tags: nginx, redis,
-postgres, node, python — millions of pulls each, none of them ours):
+postgres, node, python — millions of pulls each, none of them ours).
+Results from the 2026-07-11 run, at a realistic weekly budget of 25
+findings per image:
+
+| Image | Findings | KEV@25 CVSS-order | KEV@25 PatchTriage | EPSS@25 CVSS | EPSS@25 PT |
+|---|---|---|---|---|---|
+| nginx:1.24 | 621 | 0/0 | 0/0 | 1.50 | **13.06** |
+| node:18.16-bullseye | 9,783 | 0/4 | **4/4** | 2.72 | **22.54** |
+| postgres:15.2 | 770 | 0/4 | **4/4** | 3.24 | **20.26** |
+| python:3.10-bullseye | 6,858 | 0/0 | 0/0 | 0.16 | **10.57** |
+| redis:7.0 | 406 | 0/0 | 0/0 | 1.71 | **4.35** |
+| **Total** | **18,438** | **0/8** | **8/8** | **9.33** | **70.79** |
+
+With a realistic budget, **CVSS-descending ordering patched zero of the
+eight vulnerabilities that CISA confirms are being exploited in the wild.
+PatchTriage caught all eight**, and captured 7.6x more exploitation
+probability (EPSS mass). Reproduce it yourself:
 
 ```bash
 ./benchmarks/run_benchmark.sh

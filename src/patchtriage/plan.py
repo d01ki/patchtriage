@@ -81,7 +81,7 @@ def build_plan(findings: list[Finding]) -> list[Action]:
         if kind == "upgrade":
             summary = f"Upgrade {pkg} to {target} on {asset}"
         else:
-            summary = (f"No fix available for {pkg} on {asset} — "
+            summary = (f"No fix available for {pkg} on {asset} - "
                        f"apply mitigations / monitor vendor")
         actions.append(Action(
             action_id=f"{kind}:{asset}:{pkg}",

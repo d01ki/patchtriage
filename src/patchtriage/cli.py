@@ -4,16 +4,25 @@ Quick start (reviewers: this needs NO network and NO API keys):
 
     patchtriage demo
 
-Real usage:
+First-time interactive setup and guided run:
+
+    patchtriage setup     # asks for API keys step by step, validates, saves
+    patchtriage start     # asks what to triage, runs, opens the report
+
+Scriptable usage:
 
     patchtriage run trivy.json grype.json --assets assets.yaml \
-        --html report.html -o report.json --triage claude
+        --html report.html -o report.json --triage cascade
 """
 
 from __future__ import annotations
 
+import glob as globmod
 import json
+import os
 import shutil
+import sys
+import webbrowser
 from importlib import resources
 from pathlib import Path
 from typing import Optional
@@ -22,6 +31,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from . import config as cfgmod
 from .context import apply_context, load_inventory
 from .dedup import dedup
 from .enrich.clients import CACHE_DIR, enrich
@@ -37,31 +47,48 @@ app = typer.Typer(add_completion=False, help="AI-assisted patch triage pipeline"
 console = Console()
 
 
+@app.callback()
+def _load_config() -> None:
+    """Export keys saved by `patchtriage setup` into the environment.
+
+    Environment variables set by the user always take precedence.
+    """
+    # Never let a console that can't encode a character (e.g. cp932 on
+    # Windows) crash a run: unencodable characters degrade to '?'.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
+    cfgmod.apply_to_env()
+
+
 def _pipeline(files, fmt, asset_override, inventory_path, use_nvd, nvd_api_key,
               triage_backend, model, limit, escalation_model=None, jobs=4,
               batch=False):
-    # Layer 1 — ingest
+    # Layer 1 - ingest
     raw = []
     for f in files:
-        batch = load_file(f, fmt=fmt, asset=asset_override)
-        console.print(f"[dim]ingested {len(batch):>5} findings from {f}[/dim]")
-        raw += batch
+        parsed = load_file(f, fmt=fmt, asset=asset_override)
+        console.print(f"[dim]ingested {len(parsed):>5} findings from {f}[/dim]")
+        raw += parsed
 
-    # Layer 2 — dedup
+    # Layer 2 - dedup
     findings = dedup(raw)
     console.print(f"[bold]{len(raw)} raw -> {len(findings)} deduplicated findings[/bold]")
 
-    # Layer 4 — context (before triage so the AI sees it)
+    # Layer 4 - context (before triage so the AI sees it)
     if inventory_path:
         matched = apply_context(findings, load_inventory(inventory_path))
         console.print(f"[dim]asset context applied to {matched} findings "
                       f"from {inventory_path}[/dim]")
 
-    # Layer 3 — enrich
+    # Layer 3 - enrich
     with console.status("enriching with EPSS / CISA KEV / NVD..."):
         enrich(findings, nvd_api_key=nvd_api_key, use_nvd=use_nvd)
 
-    # Layer 5 — triage
+    # Layer 5 - triage
     subset = findings[:limit] if limit else findings
     if batch and triage_backend == "claude":
         run_triage_batch(subset, model or "claude-opus-4-8",
@@ -83,7 +110,7 @@ def _pipeline(files, fmt, asset_override, inventory_path, use_nvd, nvd_api_key,
         console.print(f"[yellow]{fell_back} findings fell back to the rules "
                       f"baseline after API errors (tagged in the report)[/yellow]")
 
-    # Audit — every AI decision is machine-verified against its signals
+    # Audit - every AI decision is machine-verified against its signals
     summary = audit_all(subset)
     if summary["flagged"]:
         console.print(f"[yellow]audit: {summary['verified']}/{summary['total']} "
@@ -95,7 +122,7 @@ def _pipeline(files, fmt, asset_override, inventory_path, use_nvd, nvd_api_key,
         console.print(f"[green]audit: {summary['verified']}/{summary['total']} "
                       f"decisions verified against deterministic signals[/green]")
 
-    # Layer 6 — plan
+    # Layer 6 - plan
     actions = build_plan(subset)
     # practicality evaluation
     eval_rows = evaluate(subset)
@@ -130,7 +157,9 @@ def run(
     exposed: bool = typer.Option(False, "--exposed", help="Asset is internet-exposed"),
     no_nvd: bool = typer.Option(False, help="Skip NVD (faster; EPSS/KEV only)"),
     nvd_api_key: Optional[str] = typer.Option(None, envvar="NVD_API_KEY"),
-    triage: str = typer.Option("rules", help="Triage backend: rules|claude|cascade"),
+    triage: Optional[str] = typer.Option(
+        None, help="Triage backend: rules|claude|cascade "
+                   "(default: your `patchtriage setup` choice, else rules)"),
     model: Optional[str] = typer.Option(
         None, help="Model id (claude: triage model; cascade: screening model)"),
     escalation_model: Optional[str] = typer.Option(
@@ -144,6 +173,7 @@ def run(
     limit: Optional[int] = typer.Option(None, help="Triage only top-N findings"),
 ):
     """Ingest -> dedup -> context -> enrich -> triage -> plan -> report."""
+    triage = triage or cfgmod.load().get("default_backend") or "rules"
     override = None
     if asset_id or exposed or criticality != "unknown":
         override = Asset(identifier=asset_id or "override", kind="host",
@@ -152,6 +182,158 @@ def run(
         files, fmt, override, assets, not no_nvd, nvd_api_key, triage, model,
         limit, escalation_model=escalation_model, jobs=jobs, batch=batch)
     _emit(findings, subset, actions, eval_rows, output, html)
+
+
+@app.command()
+def setup():
+    """Interactive first-run wizard: enter API keys step by step, get them
+    validated live, and save defaults to ~/.config/patchtriage/config.json.
+    """
+    cfg = cfgmod.load()
+    console.print("\n[bold]PatchTriage setup[/bold] - press Enter to skip or "
+                  "keep the current value.\n")
+    # Hidden input requires a real terminal; piped/CI stdin would hang on
+    # Windows' getpass, so fall back to visible input there.
+    hidden = sys.stdin.isatty()
+
+    # 1. Anthropic API key (enables the claude/cascade backends)
+    current = cfg.get("ANTHROPIC_API_KEY", "")
+    label = "Anthropic API key (sk-ant-...)"
+    if current:
+        label += f" [current: {cfgmod.mask(current)}]"
+    while True:
+        key = typer.prompt(label, default="", show_default=False,
+                           hide_input=hidden).strip()
+        if not key:
+            key = current
+            if not key:
+                console.print("[dim]skipped - the deterministic 'rules' "
+                              "backend needs no key[/dim]")
+            break
+        with console.status("validating key against the Anthropic API..."):
+            ok, msg = cfgmod.validate_anthropic_key(key)
+        if ok:
+            console.print(f"[green]OK: {msg}[/green]")
+            break
+        console.print(f"[red]{msg}[/red]")
+        if not typer.confirm("Try again?", default=True):
+            key = current
+            break
+    if key:
+        cfg["ANTHROPIC_API_KEY"] = key
+
+    # 2. NVD API key (optional - only raises NVD rate limits)
+    current_nvd = cfg.get("NVD_API_KEY", "")
+    label = "NVD API key (optional, faster NVD enrichment)"
+    if current_nvd:
+        label += f" [current: {cfgmod.mask(current_nvd)}]"
+    nvd = typer.prompt(label, default="", show_default=False,
+                       hide_input=hidden).strip()
+    if nvd:
+        cfg["NVD_API_KEY"] = nvd
+
+    # 3. Default triage backend
+    has_key = bool(cfg.get("ANTHROPIC_API_KEY"))
+    choices = ["rules", "claude", "cascade"] if has_key else ["rules"]
+    default_backend = cfg.get("default_backend",
+                              "cascade" if has_key else "rules")
+    if has_key:
+        while True:
+            backend = typer.prompt(
+                f"Default triage backend {choices} - cascade screens with a "
+                f"fast model and escalates only what matters",
+                default=default_backend).strip().lower()
+            if backend in choices:
+                break
+            console.print(f"[red]pick one of {choices}[/red]")
+    else:
+        backend = "rules"
+    cfg["default_backend"] = backend
+
+    path = cfgmod.save(cfg)
+    console.print(f"\n[green]Saved to {path}[/green] "
+                  "(environment variables always take precedence)")
+    console.print("\nNext steps:\n"
+                  "  [bold]patchtriage demo[/bold]   offline demo, no keys needed\n"
+                  "  [bold]patchtriage start[/bold]  guided run on your own scans\n")
+
+
+@app.command()
+def start():
+    """Guided run: answer a few questions, get a prioritized patch plan."""
+    if not cfgmod.config_path().exists():
+        console.print("[yellow]No saved configuration found.[/yellow]")
+        if typer.confirm("Run setup first?", default=True):
+            setup()
+    cfgmod.apply_to_env()
+    cfg = cfgmod.load()
+
+    # 1. what to triage
+    console.print("\n[bold]1. Scanner output[/bold] - PatchTriage reads "
+                  "Trivy / Grype / osv-scanner JSON.\n[dim]No scans yet? "
+                  "e.g.  trivy image --format json -o trivy.json nginx:1.24[/dim]")
+    while True:
+        pattern = typer.prompt("Path or glob (e.g. scans/*.json)")
+        files = sorted(Path(p) for p in globmod.glob(pattern.strip()))
+        if files:
+            console.print(f"[dim]{len(files)} file(s): "
+                          f"{', '.join(str(f) for f in files[:5])}"
+                          f"{' ...' if len(files) > 5 else ''}[/dim]")
+            break
+        console.print(f"[red]no files match {pattern!r}[/red]")
+
+    # 2. environment context
+    console.print("\n[bold]2. Asset context[/bold] - the same CVE on an "
+                  "exposed checkout service and an internal batch box should "
+                  "never rank the same.")
+    assets_path = typer.prompt("assets.yaml inventory (Enter to skip)",
+                               default="", show_default=False).strip()
+    inventory = Path(assets_path) if assets_path else None
+    override = None
+    if inventory is None:
+        exposed = typer.confirm("Are these assets internet-exposed?",
+                                default=False)
+        criticality = typer.prompt(
+            "Business criticality [critical/high/medium/low/unknown]",
+            default="unknown").strip().lower()
+        if exposed or criticality != "unknown":
+            override = Asset(identifier="interactive", kind="host",
+                             criticality=criticality, internet_exposed=exposed)
+
+    # 3. triage backend
+    console.print("\n[bold]3. Triage backend[/bold]")
+    has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    choices = ["rules", "claude", "cascade"] if has_key else ["rules"]
+    if not has_key:
+        console.print("[dim]no Anthropic key configured - run "
+                      "`patchtriage setup` to enable claude/cascade[/dim]")
+    default_backend = cfg.get("default_backend",
+                              "cascade" if has_key else "rules")
+    if default_backend not in choices:
+        default_backend = choices[0]
+    while True:
+        backend = typer.prompt(f"Backend {choices}",
+                               default=default_backend).strip().lower()
+        if backend in choices:
+            break
+        console.print(f"[red]pick one of {choices}[/red]")
+
+    use_nvd = typer.confirm(
+        "Enrich with NVD (official CVSS/CWE - slower without an NVD key)?",
+        default=bool(os.environ.get("NVD_API_KEY")))
+
+    # 4. outputs
+    console.print("\n[bold]4. Report[/bold]")
+    html = typer.prompt("HTML report path", default="report.html").strip()
+    output = typer.prompt("JSON report path", default="report.json").strip()
+
+    findings, subset, actions, eval_rows = _pipeline(
+        files, None, override, inventory, use_nvd,
+        os.environ.get("NVD_API_KEY"), backend, None, None)
+    _emit(findings, subset, actions, eval_rows, Path(output), Path(html))
+
+    if typer.confirm("Open the HTML report in your browser?", default=True):
+        webbrowser.open(Path(html).resolve().as_uri())
 
 
 @app.command()

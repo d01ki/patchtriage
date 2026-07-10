@@ -151,6 +151,29 @@ pip install -e ".[ai]"    # + Anthropic backend
 pip install -e ".[dev]"   # + pytest
 ```
 
+## Web console (GUI)
+
+Prefer clicking to typing? Launch the local web console:
+
+```bash
+patchtriage serve            # opens http://127.0.0.1:8765 in your browser
+```
+
+Register each internal system as a **target** (name, a **link URL** to its
+dashboard/repo/runbook, business criticality, internet exposure), attach a
+scan or an SBOM per target, and hit **Run all**. You get a per-target result
+board — priority counts, KEV count, top remediation action, audit status —
+where every target name is a **clickable link out to the system**, and each
+result opens its full HTML report. Built for estates with many systems; the
+registry persists under `~/.config/patchtriage`. Standard-library only (no
+web framework), binds to localhost, and the same asset-context logic applies:
+the identical SBOM ranks P1 on an exposed critical service and P2 on an
+internal low-criticality one.
+
+```bash
+docker compose up gui        # same console in a container -> http://localhost:8765
+```
+
 ## Interactive setup & guided run
 
 No flags to memorize — two commands walk you through everything:

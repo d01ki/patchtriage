@@ -14,7 +14,7 @@ from ..evalcmp import EvalRow
 from ..models import Finding
 from ..plan import Action, finding_risk
 
-_PRI_COLOR = {"P1": "#B3261E", "P2": "#B26A00", "P3": "#3B5BA5", "P4": "#6B7280"}
+_PRI_COLOR = {"P1": "#DC2626", "P2": "#D97706", "P3": "#2563EB", "P4": "#6B7280"}
 
 
 def _esc(s) -> str:
@@ -26,9 +26,9 @@ def _audit_badge(t: dict) -> str:
     if not a:
         return ""
     if a.get("verified"):
-        return '<span title="verified against signals" style="color:#1E5B3A;font-weight:700">✓ </span>'
+        return '<span title="verified against signals" style="color:#2563EB;font-weight:700">✓ </span>'
     flags = _esc(", ".join(a.get("flags", [])))
-    return (f'<span title="{flags}" style="color:#B26A00;font-weight:700">⚑ </span>')
+    return (f'<span title="{flags}" style="color:#D97706;font-weight:700">⚑ </span>')
 
 
 def render_html(findings: list[Finding], actions: list[Action],
@@ -115,23 +115,23 @@ def render_html(findings: list[Finding], actions: list[Action],
 <title>{_esc(title)}</title>
 <style>
   :root {{
-    --paper:#F4F6F4; --ink:#19231F; --rule:#C9D2CC; --spruce:#1E3A31;
-    --muted:#5C6B63;
+    --paper:#F5F6F8; --ink:#1B1F2A; --rule:#DDE1E8; --slate:#1E2430;
+    --muted:#5A6472; --accent:#4F46E5;
   }}
   * {{ box-sizing:border-box; }}
   body {{ margin:0; background:var(--paper); color:var(--ink);
          font:15px/1.55 "Segoe UI", "Helvetica Neue", Arial, sans-serif; }}
   .mono, td.mono {{ font-family:ui-monospace, "SF Mono", Menlo, Consolas, monospace;
                     font-size:13px; }}
-  header {{ background:var(--spruce); color:#EDF3EF; padding:28px 40px 22px; }}
+  header {{ background:var(--slate); color:#EEF1F6; padding:28px 40px 22px; }}
   header h1 {{ margin:0; font-size:26px; letter-spacing:.5px; font-weight:600; }}
-  header .meta {{ color:#A9C0B4; font-size:13px; margin-top:4px;
+  header .meta {{ color:#9AA4B2; font-size:13px; margin-top:4px;
                   font-family:ui-monospace, Menlo, monospace; }}
-  .spinewrap {{ padding:0 40px; background:var(--spruce); padding-bottom:26px; }}
+  .spinewrap {{ padding:0 40px; background:var(--slate); padding-bottom:26px; }}
   .spine {{ display:flex; height:14px; border-radius:3px; overflow:hidden;
             outline:1px solid rgba(255,255,255,.25); }}
   .seg {{ height:100%; }}
-  .legend {{ color:#A9C0B4; font-size:12px; margin-top:6px;
+  .legend {{ color:#9AA4B2; font-size:12px; margin-top:6px;
              font-family:ui-monospace, Menlo, monospace; }}
   main {{ max-width:1180px; margin:0 auto; padding:30px 40px 60px; }}
   .cards {{ display:flex; gap:14px; flex-wrap:wrap; margin-bottom:8px; }}
@@ -148,20 +148,20 @@ def render_html(findings: list[Finding], actions: list[Action],
   th {{ text-align:left; font-size:11.5px; text-transform:uppercase;
         letter-spacing:.07em; color:var(--muted); font-weight:600;
         padding:9px 12px; border-bottom:2px solid var(--rule);
-        background:#EDF1EE; }}
+        background:#EEF0F4; }}
   td {{ padding:9px 12px; border-bottom:1px solid var(--rule);
         vertical-align:top; }}
   tr:last-child td {{ border-bottom:none; }}
   td.num {{ font-family:ui-monospace, Menlo, monospace; font-size:13px;
             white-space:nowrap; }}
-  td.num.win {{ font-weight:700; color:#1E5B3A; }}
+  td.num.win {{ font-weight:700; color:#1D4ED8; }}
   .pri {{ color:#fff; font-family:ui-monospace, Menlo, monospace; font-size:12px;
           font-weight:700; padding:2px 8px; border-radius:3px; display:inline-block; }}
-  .kev {{ background:#B3261E; color:#fff; font-size:11px; font-weight:700;
+  .kev {{ background:#DC2626; color:#fff; font-size:11px; font-weight:700;
           padding:1px 6px; border-radius:3px; margin-left:6px; }}
   .cves {{ color:var(--muted); font-size:12px; margin-top:3px; }}
   .riskcell {{ min-width:180px; position:relative; }}
-  .riskbar {{ height:12px; background:linear-gradient(90deg,#2F5D4A,#1E3A31);
+  .riskbar {{ height:12px; background:linear-gradient(90deg,#6366F1,#4338CA);
               border-radius:2px; display:inline-block; min-width:2px; }}
   .riskval {{ font-family:ui-monospace, Menlo, monospace; font-size:12px;
               margin-left:8px; color:var(--muted); }}
@@ -180,7 +180,7 @@ def render_html(findings: list[Finding], actions: list[Action],
 </div>
 <main>
   <div class="cards">
-    <div class="card"><div class="v" style="color:#B3261E">{counts['P1']}</div><div class="l">patch now (P1)</div></div>
+    <div class="card"><div class="v" style="color:#DC2626">{counts['P1']}</div><div class="l">patch now (P1)</div></div>
     <div class="card"><div class="v">{kev_n}</div><div class="l">exploited in the wild</div></div>
     <div class="card"><div class="v">{len(actions)}</div><div class="l">actions close everything</div></div>
     <div class="card"><div class="v">{total}</div><div class="l">unique findings</div></div>

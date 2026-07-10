@@ -12,6 +12,21 @@
 # shell environment (optional — the default 'rules' backend needs neither).
 
 services:
+  # Web GUI console: register targets, import scans/SBOMs, browse reports.
+  #   docker compose up gui   ->   open http://localhost:8765
+  gui:
+    build: .
+    ports:
+      - "8765:8765"
+    environment:
+      - ANTHROPIC_API_KEY
+      - NVD_API_KEY
+    volumes:
+      - cache:/home/patchtriage/.cache
+      - config:/home/patchtriage/.config
+    entrypoint: ["patchtriage"]
+    command: ["serve", "--host", "0.0.0.0", "--no-browser"]
+
   # Offline demo: no network, no keys.
   demo:
     build: .
@@ -54,3 +69,4 @@ services:
 
 volumes:
   cache:
+  config:

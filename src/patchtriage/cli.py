@@ -383,6 +383,21 @@ def _is_headless() -> bool:
 
 
 @app.command()
+def serve(
+    port: int = typer.Option(8765, help="Port to listen on"),
+    host: str = typer.Option("127.0.0.1", help="Bind address"),
+    no_browser: bool = typer.Option(False, "--no-browser",
+                                    help="Don't auto-open a browser"),
+):
+    """Launch the local web console (GUI): register targets, import scans /
+    SBOMs, run triage, and browse reports — each target links out to its
+    system."""
+    from .webapp import serve as _serve
+    open_browser = not (no_browser or _is_headless())
+    _serve(host=host, port=port, open_browser=open_browser)
+
+
+@app.command()
 def demo(
     html: Path = typer.Option(Path("demo_report.html"), help="HTML output path"),
     output: Path = typer.Option(Path("demo_report.json"), help="JSON output path"),

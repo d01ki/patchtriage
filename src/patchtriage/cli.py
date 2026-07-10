@@ -356,20 +356,25 @@ def demo(
     No network, no API keys. This is what reviewers should run first.
     """
     data = resources.files("patchtriage") / "data"
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = Path(".patchtriage_demo")
+    tmp.mkdir(exist_ok=True)
+
+    # Seed the bundled snapshot into an ISOLATED cache dir, not the user's
+    # real ~/.cache/patchtriage. The demo KEV/EPSS snapshot only covers a
+    # handful of CVEs; writing it into the shared cache would silently break
+    # KEV enrichment on real scans until the 24h TTL expired.
+    demo_cache = (tmp / "cache").resolve()
+    demo_cache.mkdir(parents=True, exist_ok=True)
     for src, dst in (("demo_epss.json", "epss.json"),
                      ("demo_kev.json", "kev.json"),
                      ("demo_nvd.json", "nvd.json")):
-        target = CACHE_DIR / dst
-        if not target.exists():
-            target.write_text((data / src).read_text(encoding="utf-8"),
-                              encoding="utf-8")
-    console.print("[dim]seeded offline enrichment snapshot into "
-                  f"{CACHE_DIR}[/dim]")
+        (demo_cache / dst).write_text((data / src).read_text(encoding="utf-8"),
+                                      encoding="utf-8")
+    os.environ["PATCHTRIAGE_CACHE_DIR"] = str(demo_cache)
+    console.print("[dim]using isolated offline enrichment snapshot in "
+                  f"{demo_cache}[/dim]")
 
     fixtures = resources.files("patchtriage") / "data" / "fixtures"
-    tmp = Path(".patchtriage_demo")
-    tmp.mkdir(exist_ok=True)
     files = []
     for name in ("trivy_sample.json", "grype_sample.json"):
         p = tmp / name
@@ -380,10 +385,13 @@ def demo(
     assets_yaml.write_text((data / "demo_assets.yaml").read_text(encoding="utf-8"),
                            encoding="utf-8")
 
-    findings, subset, actions, eval_rows = _pipeline(
-        files, None, None, assets_yaml, True, None, "rules", None, None)
-    _emit(findings, subset, actions, eval_rows, output, html)
-    shutil.rmtree(tmp, ignore_errors=True)
+    try:
+        findings, subset, actions, eval_rows = _pipeline(
+            files, None, None, assets_yaml, True, None, "rules", None, None)
+        _emit(findings, subset, actions, eval_rows, output, html)
+    finally:
+        os.environ.pop("PATCHTRIAGE_CACHE_DIR", None)
+        shutil.rmtree(tmp, ignore_errors=True)
     console.print("\n[bold green]Demo complete.[/bold green] Open "
                   f"[bold]{html}[/bold] in a browser. To try the AI backend: "
                   "export ANTHROPIC_API_KEY=... and re-run with "

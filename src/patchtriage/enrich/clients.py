@@ -17,6 +17,7 @@ Design rules:
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,7 +26,7 @@ import httpx
 
 from ..models import Finding
 
-CACHE_DIR = Path.home() / ".cache" / "patchtriage"
+_DEFAULT_CACHE_DIR = Path.home() / ".cache" / "patchtriage"
 EPSS_URL = "https://api.first.org/data/v1/epss"
 KEV_URL = ("https://www.cisa.gov/sites/default/files/feeds/"
            "known_exploited_vulnerabilities.json")
@@ -35,9 +36,25 @@ _EXPLOIT_HINTS = ("exploit-db.com", "metasploit", "github.com/rapid7",
                   "packetstormsecurity", "poc")
 
 
+def cache_dir() -> Path:
+    """Resolve the enrichment cache directory at call time.
+
+    Overridable via PATCHTRIAGE_CACHE_DIR so the offline demo can use an
+    isolated cache and never poison a user's real one (the demo ships a tiny
+    KEV/EPSS snapshot; writing it into the shared cache would break KEV
+    enrichment on real scans until the 24h TTL expired).
+    """
+    return Path(os.environ.get("PATCHTRIAGE_CACHE_DIR") or _DEFAULT_CACHE_DIR)
+
+
+# Backwards-compatible module attribute (some callers import CACHE_DIR).
+CACHE_DIR = _DEFAULT_CACHE_DIR
+
+
 def _cache_path(name: str) -> Path:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    return CACHE_DIR / name
+    d = cache_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / name
 
 
 def _load_cache(name: str, max_age_hours: float) -> dict | None:

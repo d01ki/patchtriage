@@ -23,13 +23,14 @@ Frontier AI has industrialized vulnerability discovery. Scanners, fuzzers and
 LLM-assisted auditing now produce findings far faster than any team can patch,
 and the bottleneck has quietly moved from *finding* vulnerabilities to
 *deciding what to fix first*. The industry's default answer — sort by CVSS —
-is measurably wrong: in our benchmark across five widely used open-source
-container images (18,000+ findings; nginx, redis, postgres, node, python),
-CVSS-descending ordering placed **100% of the CISA known-exploited
-vulnerabilities (0 of 8) outside a realistic weekly patch budget of 25
-findings per image**, while PatchTriage's signal-based ordering caught all 8
-with the same budget — and captured 7.6x more exploitation-probability mass
-(FIRST EPSS) overall.
+is measurably wrong: in our benchmark across 18 end-of-life tags of famous
+open-source images (31,000+ findings; old python, ruby, node, php, tomcat,
+drupal, wordpress, centos, …), **118 findings are on the CISA
+Known-Exploited-Vulnerabilities list, and CVSS-descending ordering placed
+just 1 of them inside a realistic weekly patch budget of 25 findings per
+image — missing 99% of what attackers are actively using**. PatchTriage's
+signal-based ordering caught 99 of 118 (84%) with the same budget, and
+captured 2.4x more exploitation-probability mass (FIRST EPSS) overall.
 
 The obvious fix — "let an LLM prioritize" — introduces a new problem: how do
 you trust an AI's risk decisions? PatchTriage's answer is an architecture we

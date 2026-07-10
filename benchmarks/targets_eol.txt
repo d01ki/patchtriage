@@ -1,0 +1,39 @@
+# "Old but famous" benchmark targets for PatchTriage.
+#
+# These are pinned, end-of-life tags of extremely popular public images.
+# They are NOT ours and NOT cherry-picked for us: they are simply what a lot
+# of organizations still actually run in production long after upstream
+# stopped patching. Because they carry old glibc / sudo / openssl / bash /
+# polkit / log4j etc., many of their vulnerabilities are on the CISA
+# Known-Exploited-Vulnerabilities list -- which is exactly where sorting by
+# CVSS falls apart and prioritization matters.
+#
+# One image per line. Lines starting with # are ignored.
+
+# --- End-of-life OS base images ---
+debian:9
+debian:10
+ubuntu:16.04
+ubuntu:18.04
+centos:7
+
+# --- End-of-life language runtimes ---
+python:2.7
+python:3.5
+node:8
+node:10
+ruby:2.5
+php:7.2
+golang:1.13
+
+# --- Old, widely deployed web / app stacks ---
+wordpress:5.2
+drupal:8.7
+httpd:2.4.38
+nginx:1.14
+tomcat:8.5.32
+
+# --- Old databases ---
+mysql:5.6
+mongo:3.6
+postgres:9.6

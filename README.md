@@ -274,31 +274,32 @@ so every decision is auditable against the signals it was made from.
 `benchmarks/run_benchmark.sh` reproduces the practicality evaluation against
 five widely used public container images (pinned tags: nginx, redis,
 postgres, node, python — millions of pulls each, none of them ours).
-Results from the 2026-07-11 run, at a realistic weekly budget of 25
-findings per image:
+`benchmarks/targets_eol.txt` points the same harness at 18 end-of-life tags
+of famous images (old glibc/sudo/openssl/log4j → lots of known-exploited
+CVEs). At a realistic weekly budget of 25 findings per image (2026-07-11):
 
-| Image | Findings | KEV@25 CVSS-order | KEV@25 PatchTriage | EPSS@25 CVSS | EPSS@25 PT |
-|---|---|---|---|---|---|
-| nginx:1.24 | 621 | 0/0 | 0/0 | 1.50 | **13.06** |
-| node:18.16-bullseye | 9,783 | 0/4 | **4/4** | 2.72 | **22.54** |
-| postgres:15.2 | 770 | 0/4 | **4/4** | 3.24 | **20.26** |
-| python:3.10-bullseye | 6,858 | 0/0 | 0/0 | 0.16 | **10.57** |
-| redis:7.0 | 406 | 0/0 | 0/0 | 1.71 | **4.35** |
-| **Total** | **18,438** | **0/8** | **8/8** | **9.33** | **70.79** |
+| Metric (summed over 18 EOL images, 31k findings) | CVSS-order | PatchTriage |
+|---|---|---|
+| CISA-KEV (actively exploited) caught in budget | **1 / 118** | **99 / 118** |
+| EPSS mass (exploitation probability) captured | 97.5 | **236.6** |
 
-With a realistic budget, **CVSS-descending ordering patched zero of the
-eight vulnerabilities that CISA confirms are being exploited in the wild.
-PatchTriage caught all eight**, and captured 7.6x more exploitation
-probability (EPSS mass). Reproduce it yourself:
+**Sorting by CVSS put 1 of 118 known-exploited vulnerabilities inside the
+budget — it missed 99% of the things attackers are actually using.**
+PatchTriage caught 99/118 (84%) with the same budget and 2.4x the EPSS mass.
+Per-image breakdown in [docs/BENCHMARKS-2026-07-11.md](docs/BENCHMARKS-2026-07-11.md).
+Reproduce either set yourself:
 
 ```bash
-./benchmarks/run_benchmark.sh
+./benchmarks/run_benchmark.sh                                  # 5 current images
+TARGETS_FILE=benchmarks/targets_eol.txt SCANNERS=trivy \
+  ./benchmarks/run_benchmark.sh                                # 18 EOL images
 # -> benchmarks/out/BENCHMARKS.md with the aggregated comparison table
 ```
 
 Local `trivy`/`grype` binaries are used when present; otherwise the script
 falls back to pinned `aquasec/trivy` / `anchore/grype` container images, so
-Docker alone is enough to reproduce the numbers.
+Docker alone is enough to reproduce the numbers. `SCANNERS=trivy` roughly
+halves runtime; `PRUNE=1` removes each image after scanning on large runs.
 
 For each image it scans with Trivy and Grype, runs the full pipeline, and
 reports KEV@k / EPSS@k for CVSS-ordering vs PatchTriage-ordering at a

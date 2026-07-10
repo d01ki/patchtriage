@@ -273,14 +273,20 @@ def start():
                   "Trivy / Grype / osv-scanner JSON.\n[dim]No scans yet? "
                   "e.g.  trivy image --format json -o trivy.json nginx:1.24[/dim]")
     while True:
-        pattern = typer.prompt("Path or glob (e.g. scans/*.json)")
-        files = sorted(Path(p) for p in globmod.glob(pattern.strip()))
+        pattern = typer.prompt("Path or glob (e.g. scans/*.json)").strip()
+        files = sorted(Path(p) for p in globmod.glob(pattern))
         if files:
             console.print(f"[dim]{len(files)} file(s): "
                           f"{', '.join(str(f) for f in files[:5])}"
                           f"{' ...' if len(files) > 5 else ''}[/dim]")
             break
         console.print(f"[red]no files match {pattern!r}[/red]")
+        if os.name != "nt" and len(pattern) > 2 and pattern[1] == ":" \
+                and pattern[2] in "\\/":
+            console.print("[yellow]that looks like a Windows path, but this "
+                          "is not a Windows machine - copy the file here "
+                          "first (e.g. scp), or run patchtriage where the "
+                          "file lives[/yellow]")
 
     # 2. environment context
     console.print("\n[bold]2. Asset context[/bold] - the same CVE on an "
@@ -327,9 +333,13 @@ def start():
     html = typer.prompt("HTML report path", default="report.html").strip()
     output = typer.prompt("JSON report path", default="report.json").strip()
 
-    findings, subset, actions, eval_rows = _pipeline(
-        files, None, override, inventory, use_nvd,
-        os.environ.get("NVD_API_KEY"), backend, None, None)
+    try:
+        findings, subset, actions, eval_rows = _pipeline(
+            files, None, override, inventory, use_nvd,
+            os.environ.get("NVD_API_KEY"), backend, None, None)
+    except ValueError as exc:  # e.g. SBOM instead of a scan, unknown format
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
     _emit(findings, subset, actions, eval_rows, Path(output), Path(html))
 
     if typer.confirm("Open the HTML report in your browser?", default=True):

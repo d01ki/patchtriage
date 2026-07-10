@@ -168,12 +168,30 @@ def sniff_format(data: dict) -> str | None:
     return None
 
 
+def detect_sbom(data: dict) -> str | None:
+    """Detect SBOM documents (package inventories with no vulnerability data)."""
+    if "spdxVersion" in data:
+        return "SPDX"
+    if data.get("bomFormat") == "CycloneDX":
+        return "CycloneDX"
+    return None
+
+
 def load_file(path: str | Path, fmt: str | None = None,
               asset: Asset | None = None) -> list[RawFinding]:
     """Load one scanner output file into RawFindings."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     fmt = fmt or sniff_format(data)
     if fmt not in PARSERS:
+        sbom = detect_sbom(data)
+        if sbom:
+            raise ValueError(
+                f"{path} is a {sbom} SBOM - a package inventory with no "
+                f"vulnerability data. Scan it first, then triage the scan:\n"
+                f"  trivy sbom --format json -o trivy.json \"{path}\"\n"
+                f"  grype \"sbom:{path}\" -o json > grype.json\n"
+                f"then:\n"
+                f"  patchtriage run trivy.json grype.json")
         raise ValueError(f"Unrecognized scanner format for {path}. "
                          f"Pass fmt= one of {sorted(PARSERS)}")
     return list(PARSERS[fmt](data, asset))

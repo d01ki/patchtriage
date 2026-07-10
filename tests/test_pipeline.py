@@ -179,3 +179,18 @@ def test_audit_catches_patch_without_fix():
     f.triage["rationale"] = "patch it"
     result = audit_finding(f, _RB())
     assert "patch_without_fix" in result["flags"]
+
+
+# ---------------------------------------------------------------- sbom guard
+def test_sbom_input_gets_helpful_error(tmp_path):
+    spdx = tmp_path / "sbom.json"
+    spdx.write_text('{"spdxVersion": "SPDX-2.3", "packages": []}',
+                    encoding="utf-8")
+    with pytest.raises(ValueError, match="SPDX SBOM") as exc:
+        load_file(spdx)
+    assert "trivy sbom" in str(exc.value)      # remediation hint included
+    cdx = tmp_path / "bom.json"
+    cdx.write_text('{"bomFormat": "CycloneDX", "components": []}',
+                   encoding="utf-8")
+    with pytest.raises(ValueError, match="CycloneDX SBOM"):
+        load_file(cdx)

@@ -1,0 +1,103 @@
+"""Layer 2 — Dedup / correlation.
+
+Multiple scanners report the same real-world problem with different ids,
+severities and package spellings. We merge on a stable key:
+
+    (canonical vuln id) x (normalized package name) x (asset identifier)
+
+Canonical vuln id prefers CVE over GHSA/DSA/... using the alias graph, so a
+Trivy "CVE-2023-1234" and a Grype "GHSA-xxxx (related: CVE-2023-1234)" merge.
+
+Merge policy: keep the MAX severity / CVSS across scanners (conservative),
+union references and reported_by, keep earliest detection time.
+"""
+
+from __future__ import annotations
+
+import re
+from collections import defaultdict
+
+from .models import Finding, RawFinding, Severity
+
+_SEV_ORDER = {
+    Severity.UNKNOWN: -1,
+    Severity.NEGLIGIBLE: 0,
+    Severity.LOW: 1,
+    Severity.MEDIUM: 2,
+    Severity.HIGH: 3,
+    Severity.CRITICAL: 4,
+}
+
+_PKG_NORM = re.compile(r"[^a-z0-9]+")
+
+
+def _norm_pkg(name: str) -> str:
+    """python_dateutil / python-dateutil / Python.Dateutil -> pythondateutil"""
+    return _PKG_NORM.sub("", name.lower())
+
+
+def _canonical_id(raw: RawFinding, alias_map: dict[str, str]) -> str:
+    ids = [raw.vuln_id, *raw.aliases]
+    for i in ids:
+        if i.upper().startswith("CVE-"):
+            return i.upper()
+    # non-CVE: check whether any alias was already linked to a CVE elsewhere
+    for i in ids:
+        if i in alias_map:
+            return alias_map[i]
+    return raw.vuln_id
+
+
+def dedup(raw_findings: list[RawFinding]) -> list[Finding]:
+    # Pass 1: build alias -> CVE map across ALL findings (cross-scanner linking)
+    alias_map: dict[str, str] = {}
+    for r in raw_findings:
+        ids = [r.vuln_id, *r.aliases]
+        cves = [i.upper() for i in ids if i.upper().startswith("CVE-")]
+        if cves:
+            canonical = sorted(cves)[0]
+            for i in ids:
+                alias_map[i] = canonical
+
+    # Pass 2: bucket by dedup key
+    buckets: dict[str, list[RawFinding]] = defaultdict(list)
+    for r in raw_findings:
+        vid = _canonical_id(r, alias_map)
+        key = f"{vid}|{_norm_pkg(r.package.name)}|{r.asset.identifier}"
+        buckets[key].append(r)
+
+    # Pass 3: merge each bucket
+    findings: list[Finding] = []
+    for key, group in buckets.items():
+        group.sort(key=lambda r: _SEV_ORDER[r.severity], reverse=True)
+        head = group[0]
+        vid = _canonical_id(head, alias_map)
+
+        aliases = sorted({a for r in group for a in [r.vuln_id, *r.aliases]
+                          if a.upper() != vid})
+        refs = sorted({ref for r in group for ref in r.references if ref})[:20]
+        cvss = [r.cvss_score for r in group if r.cvss_score is not None]
+        fixed = next((r.package.fixed_version for r in group
+                      if r.package.fixed_version), "")
+        title = next((r.title for r in group if r.title), "")
+        desc = max((r.description for r in group), key=len, default="")
+
+        pkg = head.package.model_copy(update={"fixed_version": fixed})
+        findings.append(Finding(
+            key=key,
+            vuln_id=vid,
+            aliases=aliases,
+            package=pkg,
+            asset=head.asset,
+            severity=head.severity,
+            cvss_score=max(cvss) if cvss else None,
+            title=title,
+            description=desc,
+            references=refs,
+            reported_by=sorted({r.source_scanner for r in group}),
+            first_seen=min(r.detected_at for r in group),
+        ))
+
+    findings.sort(key=lambda f: (_SEV_ORDER[f.severity], f.cvss_score or 0),
+                  reverse=True)
+    return findings

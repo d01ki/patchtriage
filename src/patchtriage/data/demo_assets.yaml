@@ -1,0 +1,14 @@
+# Asset inventory: teaches PatchTriage about YOUR environment.
+# First matching rule wins (glob patterns against asset identifier).
+assets:
+  - match: "web-frontend*"
+    criticality: critical
+    internet_exposed: true
+    owner: platform-team
+    notes: customer-facing checkout
+  - match: "batch-*"
+    criticality: low
+    internet_exposed: false
+  - match: "*"
+    criticality: medium
+    internet_exposed: false

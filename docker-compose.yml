@@ -1,0 +1,28 @@
+# Reproducible entry points for reviewers.
+#
+#   docker compose run --rm demo          # offline demo -> ./out/demo_report.html
+#   docker compose run --rm triage run scans/trivy.json --triage claude \
+#       -o /out/report.json --html /out/report.html
+#
+# The triage service reads ANTHROPIC_API_KEY from your shell environment.
+
+services:
+  demo:
+    build: .
+    volumes:
+      - ./out:/out
+
+  triage:
+    build: .
+    environment:
+      - ANTHROPIC_API_KEY
+      - NVD_API_KEY
+    volumes:
+      - ./out:/out
+      - ./:/work:ro
+      - cache:/home/patchtriage/.cache
+    entrypoint: ["patchtriage"]
+    command: ["--help"]
+
+volumes:
+  cache:

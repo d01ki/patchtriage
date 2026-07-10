@@ -181,16 +181,12 @@ def test_audit_catches_patch_without_fix():
     assert "patch_without_fix" in result["flags"]
 
 
-# ---------------------------------------------------------------- sbom guard
-def test_sbom_input_gets_helpful_error(tmp_path):
+# ---------------------------------------------------------------- sbom input
+def test_empty_sbom_reports_no_components(tmp_path):
+    # A populated SBOM is resolved online via OSV.dev (see test_sbom.py); an
+    # empty one has nothing to resolve, and the error should say exactly that.
     spdx = tmp_path / "sbom.json"
     spdx.write_text('{"spdxVersion": "SPDX-2.3", "packages": []}',
                     encoding="utf-8")
-    with pytest.raises(ValueError, match="SPDX SBOM") as exc:
+    with pytest.raises(ValueError, match="no components"):
         load_file(spdx)
-    assert "trivy sbom" in str(exc.value)      # remediation hint included
-    cdx = tmp_path / "bom.json"
-    cdx.write_text('{"bomFormat": "CycloneDX", "components": []}',
-                   encoding="utf-8")
-    with pytest.raises(ValueError, match="CycloneDX SBOM"):
-        load_file(cdx)

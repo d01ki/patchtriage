@@ -169,29 +169,34 @@ def sniff_format(data: dict) -> str | None:
 
 
 def detect_sbom(data: dict) -> str | None:
-    """Detect SBOM documents (package inventories with no vulnerability data)."""
-    if "spdxVersion" in data:
-        return "SPDX"
-    if data.get("bomFormat") == "CycloneDX":
-        return "CycloneDX"
-    return None
+    """Detect SBOM documents (CycloneDX / SPDX)."""
+    from .sbom import is_sbom
+    kind = is_sbom(data)
+    return {"cyclonedx": "CycloneDX", "spdx": "SPDX"}.get(kind)
 
 
 def load_file(path: str | Path, fmt: str | None = None,
-              asset: Asset | None = None) -> list[RawFinding]:
-    """Load one scanner output file into RawFindings."""
+              asset: Asset | None = None, progress=None) -> list[RawFinding]:
+    """Load one scanner output OR SBOM file into RawFindings.
+
+    Scanner JSON (Trivy/Grype/OSV) is parsed offline. SBOMs (CycloneDX / SPDX,
+    e.g. the SPDX export GitHub generates) carry no vulnerabilities of their
+    own, so they are resolved online via OSV.dev — no local scanner needed,
+    just network access. See ingest/sbom.py.
+    """
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+
+    from .sbom import is_sbom
+    sbom_kind = None if fmt in PARSERS else (fmt if fmt in ("cyclonedx", "spdx")
+                                             else is_sbom(data))
+    if sbom_kind:
+        from .sbom import load_sbom
+        return load_sbom(path, asset=asset, progress=progress)
+
     fmt = fmt or sniff_format(data)
     if fmt not in PARSERS:
-        sbom = detect_sbom(data)
-        if sbom:
-            raise ValueError(
-                f"{path} is a {sbom} SBOM - a package inventory with no "
-                f"vulnerability data. Scan it first, then triage the scan:\n"
-                f"  trivy sbom --format json -o trivy.json \"{path}\"\n"
-                f"  grype \"sbom:{path}\" -o json > grype.json\n"
-                f"then:\n"
-                f"  patchtriage run trivy.json grype.json")
-        raise ValueError(f"Unrecognized scanner format for {path}. "
-                         f"Pass fmt= one of {sorted(PARSERS)}")
+        raise ValueError(
+            f"Unrecognized format for {path}. Expected Trivy/Grype/OSV "
+            f"scanner JSON (one of {sorted(PARSERS)}) or a CycloneDX/SPDX "
+            f"SBOM. Pass fmt= to force a scanner format.")
     return list(PARSERS[fmt](data, asset))

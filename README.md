@@ -159,13 +159,32 @@ No flags to memorize — two commands walk you through everything:
 patchtriage setup    # asks for your API keys one by one, validates the
                      # Anthropic key live (no tokens spent), lets you pick a
                      # default backend, saves to ~/.config/patchtriage/
-patchtriage start    # asks what to triage (path/glob), asset context,
-                     # backend, output paths - then runs and opens the report
+patchtriage start    # asks what to triage (scan JSON or SBOM), asset
+                     # context, backend, output paths - then runs the report
 ```
 
 Keys entered in `setup` are stored locally (0600) and exported for every
 later command; environment variables always take precedence, so CI and
 containers are unaffected.
+
+## Have an SBOM, no scanner? (e.g. GitHub's SPDX export)
+
+An SBOM lists *components*, not vulnerabilities — so on its own there is
+nothing to triage. PatchTriage bridges that gap online: point it at a
+CycloneDX or SPDX file and it resolves every package against the free
+[OSV.dev](https://osv.dev) database to get the vulnerabilities, then enriches
+and triages them exactly like scanner output. **No Trivy/Grype install
+needed — just network access.** This is the path when you cloned the repo on
+a plain Linux box and your SBOM came from GitHub's dependency graph:
+
+```bash
+# GitHub -> repo -> Insights -> Dependency graph -> Export SBOM (SPDX JSON)
+patchtriage run sbom.spdx.json --criticality high --html report.html
+# CycloneDX works too (syft, cdxgen, cyclonedx-* all emit it):
+patchtriage run bom.cdx.json -o report.json
+```
+
+The format is auto-detected. OSV responses are cached, so re-runs are cheap.
 
 ## Usage
 
@@ -190,12 +209,20 @@ patchtriage run trivy.json --triage cascade --jobs 8 \
     --model claude-haiku-4-5 --escalation-model claude-opus-4-8
 ```
 
-Everything also runs containerized:
+### Everything runs containerized (nothing but Docker on the host)
 
 ```bash
-docker compose run --rm triage run /work/trivy.json --triage cascade \
-    -o /out/report.json --html /out/report.html
+docker compose run --rm demo         # offline demo -> ./out/demo_report.html
+docker compose run --rm start        # interactive guided run (asks questions)
+docker compose run --rm triage run /work/sbom.spdx.json \
+    --criticality high -o /out/report.json --html /out/report.html
 ```
+
+Files under the repo dir appear at `/work` inside the container; reports
+written to `/out` land in `./out` on the host. `start` keeps stdin attached
+so the wizard works, auto-skips the browser step in a container, and prints
+the report path under `./out` instead. `ANTHROPIC_API_KEY` / `NVD_API_KEY`
+are read from your shell environment (optional — `rules` needs neither).
 
 Generate inputs with the scanners you already run:
 

@@ -58,7 +58,7 @@ def audit_finding(f: Finding, rules: RulesBackend) -> dict:
     signals = _signal_values(f)
     for m in _DECIMAL.finditer(rationale):
         v = float(m.group())
-        if v > 10.0:          # not a score-like value
+        if v > 10.0 or v == 0.0:  # not a score-like value / carries no signal
             continue
         if not any(abs(v - s) <= 0.051 for s in signals):
             flags.append(f"fabricated_number:{v}")

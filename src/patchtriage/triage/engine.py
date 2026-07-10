@@ -94,10 +94,11 @@ class RulesBackend:
                   else "mitigate" if prio == "P1"
                   else "patch_scheduled" if has_fix
                   else "investigate")
+        epss_str = f"{e.epss_score:.3f}" if e.epss_score is not None else "n/a"
         return {
             "priority": prio, "action": action,
             "suggested_deadline_days": days,
-            "rationale": (f"rules: cvss={score}, epss={epss:.3f}, "
+            "rationale": (f"rules: cvss={score}, epss={epss_str}, "
                           f"kev={e.in_cisa_kev}, exposed={exposed}, fix={has_fix}"),
             "backend": "rules",
         }

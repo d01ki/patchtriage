@@ -1,26 +1,54 @@
-# Reproducible entry points for reviewers.
+# Reproducible entry points for reviewers. Everything runs in a container;
+# nothing but Docker is required on the host.
 #
-#   docker compose run --rm demo          # offline demo -> ./out/demo_report.html
-#   docker compose run --rm triage run scans/trivy.json --triage claude \
+#   docker compose run --rm demo         # offline demo -> ./out/demo_report.html
+#   docker compose run --rm start        # interactive guided run (asks questions)
+#   docker compose run --rm triage run /work/sbom.json \
 #       -o /out/report.json --html /out/report.html
 #
-# The triage service reads ANTHROPIC_API_KEY from your shell environment.
+# Put your scans / SBOMs anywhere under this directory; they appear at /work
+# inside the container. Reports written to /out land in ./out on the host.
+# The triage/start services read ANTHROPIC_API_KEY and NVD_API_KEY from your
+# shell environment (optional — the default 'rules' backend needs neither).
 
 services:
+  # Offline demo: no network, no keys.
   demo:
     build: .
     volumes:
       - ./out:/out
 
+  # Interactive guided run. `run` (not `-d`) keeps stdin/tty attached so the
+  # wizard can ask its questions; the browser step is auto-skipped in the
+  # container and the report path under ./out is printed instead.
+  start:
+    build: .
+    stdin_open: true
+    tty: true
+    environment:
+      - ANTHROPIC_API_KEY
+      - NVD_API_KEY
+      - PATCHTRIAGE_IN_CONTAINER=1
+    volumes:
+      - ./:/work
+      - ./out:/out
+      - cache:/home/patchtriage/.cache
+    working_dir: /work
+    entrypoint: ["patchtriage"]
+    command: ["start"]
+
+  # Scriptable triage: pass any `run ...` arguments after the service name.
   triage:
     build: .
     environment:
       - ANTHROPIC_API_KEY
       - NVD_API_KEY
+      - PATCHTRIAGE_IN_CONTAINER=1
     volumes:
+      - ./:/work
       - ./out:/out
-      - ./:/work:ro
       - cache:/home/patchtriage/.cache
+    working_dir: /work
     entrypoint: ["patchtriage"]
     command: ["--help"]
 

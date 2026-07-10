@@ -70,7 +70,9 @@ def _pipeline(files, fmt, asset_override, inventory_path, use_nvd, nvd_api_key,
     # Layer 1 - ingest
     raw = []
     for f in files:
-        parsed = load_file(f, fmt=fmt, asset=asset_override)
+        with console.status(f"reading {f} "
+                            "(SBOMs are resolved online via OSV.dev)..."):
+            parsed = load_file(f, fmt=fmt, asset=asset_override)
         console.print(f"[dim]ingested {len(parsed):>5} findings from {f}[/dim]")
         raw += parsed
 
@@ -149,7 +151,9 @@ def _emit(findings, subset, actions, eval_rows, output, html):
 
 @app.command()
 def run(
-    files: list[Path] = typer.Argument(..., help="Scanner JSON outputs (Trivy/Grype/OSV)"),
+    files: list[Path] = typer.Argument(
+        ..., help="Scanner JSON (Trivy/Grype/OSV) or CycloneDX/SPDX SBOM "
+                  "(SBOMs are resolved online via OSV.dev)"),
     fmt: Optional[str] = typer.Option(None, help="Force format: trivy|grype|osv"),
     assets: Optional[Path] = typer.Option(None, help="Asset inventory YAML (Layer 4)"),
     asset_id: Optional[str] = typer.Option(None, help="Override asset identifier"),
@@ -269,9 +273,12 @@ def start():
     cfg = cfgmod.load()
 
     # 1. what to triage
-    console.print("\n[bold]1. Scanner output[/bold] - PatchTriage reads "
-                  "Trivy / Grype / osv-scanner JSON.\n[dim]No scans yet? "
-                  "e.g.  trivy image --format json -o trivy.json nginx:1.24[/dim]")
+    console.print("\n[bold]1. Input[/bold] - PatchTriage reads "
+                  "Trivy / Grype / osv-scanner JSON, or a CycloneDX / SPDX "
+                  "SBOM.\n[dim]No scans? Point it at an SBOM (e.g. GitHub's "
+                  "SPDX export) - packages are resolved online via OSV.dev, "
+                  "no local scanner needed.\nHave a scanner? "
+                  "trivy image --format json -o trivy.json nginx:1.24[/dim]")
     while True:
         pattern = typer.prompt("Path or glob (e.g. scans/*.json)").strip()
         files = sorted(Path(p) for p in globmod.glob(pattern))
@@ -337,13 +344,42 @@ def start():
         findings, subset, actions, eval_rows = _pipeline(
             files, None, override, inventory, use_nvd,
             os.environ.get("NVD_API_KEY"), backend, None, None)
-    except ValueError as exc:  # e.g. SBOM instead of a scan, unknown format
+    except ValueError as exc:  # unrecognized format
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
     _emit(findings, subset, actions, eval_rows, Path(output), Path(html))
+    _offer_browser(Path(html))
 
+
+def _offer_browser(html: Path) -> None:
+    """Offer to open the report — but never in a headless/container context."""
+    resolved = html.resolve()
+    if _is_headless():
+        console.print(f"\n[bold]Open the report:[/bold] {resolved}")
+        if _in_container():
+            console.print("[dim](running in a container - open the file on "
+                          "your host via the mounted volume)[/dim]")
+        return
     if typer.confirm("Open the HTML report in your browser?", default=True):
-        webbrowser.open(Path(html).resolve().as_uri())
+        try:
+            webbrowser.open(resolved.as_uri())
+        except Exception:
+            console.print(f"[dim]open it manually: {resolved}[/dim]")
+
+
+def _in_container() -> bool:
+    return (Path("/.dockerenv").exists()
+            or os.environ.get("PATCHTRIAGE_IN_CONTAINER") == "1")
+
+
+def _is_headless() -> bool:
+    if _in_container():
+        return True
+    # Linux without a display server has no browser to open
+    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY") \
+            and not os.environ.get("WAYLAND_DISPLAY"):
+        return True
+    return False
 
 
 @app.command()

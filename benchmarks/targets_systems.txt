@@ -1,0 +1,28 @@
+# Self-hosted business *systems* — the kind an enterprise actually runs
+# internally, as opposed to base images or frameworks. Pinned to older tags
+# so vulnerabilities (and CISA-KEV entries) are guaranteed to exist.
+#
+# These map cleanly onto GUI "targets": each is a system you'd register and
+# keep patched (a wiki, a CI server, a chat app, a dashboard, a git server…).
+#
+# One image per line; # comments ignored. Use with:
+#   TARGETS_FILE=benchmarks/targets_systems.txt SCANNERS=trivy PRUNE=1 \
+#     ./benchmarks/run_benchmark.sh
+
+# --- Developer / DevOps systems ---
+jenkins/jenkins:2.319-slim          # CI/CD server
+gitea/gitea:1.13.0                  # self-hosted git service
+sonarqube:8.9-community             # code quality / SAST server
+sonatype/nexus3:3.30.0              # artifact repository
+
+# --- Collaboration / knowledge systems ---
+nextcloud:20-apache                 # file sync & share
+mattermost/mattermost-team-edition:5.30.0   # team chat
+redmine:4.1                         # project management / ticketing
+ghost:3.42                          # publishing / CMS
+
+# --- Ops / data systems ---
+grafana/grafana:8.0.0               # monitoring dashboards
+metabase/metabase:v0.40.0           # business intelligence
+zabbix/zabbix-web-nginx-pgsql:5.0.0-ubuntu   # infrastructure monitoring
+wordpress:5.5                       # intranet / marketing CMS

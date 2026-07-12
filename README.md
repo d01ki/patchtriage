@@ -30,9 +30,14 @@ everything:
 
 ```bash
 git clone https://github.com/d01ki/patchtriage && cd patchtriage
-docker compose up gui            # builds the image, starts the web console
-# then open http://localhost:8765
+./run.sh                         # builds, starts the console, opens your browser
+# equivalently: docker compose up gui   ->   http://localhost:8765
 ```
+
+`./run.sh` builds the image, starts the console, waits until it is ready, and
+opens `http://localhost:8765`. Stop it with `./run.sh --stop`. (Upgraded from
+an older version and hitting permission errors? Reset the volumes once with
+`docker compose down -v`.)
 
 That launches the **web console**: register your systems as targets, import a
 scan or SBOM per target from the browser, and run triage — no local scanner
@@ -361,8 +366,15 @@ Reproduce either set yourself:
 ./benchmarks/run_benchmark.sh                                  # 5 current images
 TARGETS_FILE=benchmarks/targets_eol.txt SCANNERS=trivy \
   ./benchmarks/run_benchmark.sh                                # 18 EOL images
+TARGETS_FILE=benchmarks/targets_systems.txt SCANNERS=trivy PRUNE=1 \
+  ./benchmarks/run_benchmark.sh                                # self-hosted systems
 # -> benchmarks/out/BENCHMARKS.md with the aggregated comparison table
 ```
+
+`targets_systems.txt` targets the kind of software an enterprise actually
+self-hosts internally — Jenkins, GitLab-style git servers, Nextcloud,
+Mattermost, Grafana, SonarQube, Redmine, Zabbix — rather than base images or
+frameworks, so the benchmark mirrors a real internal estate.
 
 Local `trivy`/`grype` binaries are used when present; otherwise the script
 falls back to pinned `aquasec/trivy` / `anchore/grype` container images, so

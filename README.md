@@ -347,34 +347,33 @@ so every decision is auditable against the signals it was made from.
 We ran the pipeline against **11 pinned images of software enterprises
 actually self-host internally** — Jenkins, Nextcloud, Redmine, Nexus, Gitea,
 Grafana, SonarQube, Mattermost, Ghost, Metabase, WordPress — not base images
-or frameworks. At a realistic weekly budget of **k = 25 findings per system**
-(2026-07-11):
+or frameworks. At a realistic weekly budget of **k = 50 findings per system**
+(one package upgrade usually closes many findings, so 50 is a light week):
 
-| System | Findings | KEV@25 — CVSS order | KEV@25 — PatchTriage |
+| System | Findings | KEV@50 — CVSS order | KEV@50 — PatchTriage |
 |---|---|---|---|
 | Jenkins 2.319 | 1,267 | 0/10 | **10/10** |
-| Nextcloud 20 | 9,700 | 0/28 | **13/28** |
-| Redmine 4.1 | 9,432 | 0/22 | **18/22** |
+| Nextcloud 20 | 9,700 | 0/28 | **26/28** |
+| Redmine 4.1 | 9,432 | 0/22 | **21/22** |
 | Nexus 3.30 | 1,936 | 0/9 | **9/9** |
-| WordPress 5.5 | 2,137 | 0/16 | **11/16** |
+| WordPress 5.5 | 2,137 | 0/16 | **16/16** |
 | Metabase 0.40 | 349 | 1/2 | **2/2** |
 | + Gitea, Grafana, SonarQube, Mattermost, Ghost | — | 0/0 | 0/0 |
-| **Total (11 systems, ~26k findings)** | | **1 / 87** | **63 / 87** |
+| **Total (11 systems, ~26k findings)** | | **1 / 87** | **84 / 87** |
 
 **Across 87 findings that CISA confirms are being exploited in the wild,
 sorting by CVSS put just 1 inside the budget — it missed 99%. PatchTriage
-caught 63 (72%)**, and captured 2.4x more exploitation-probability mass
+caught 84 (97%)**, and captured 2.6x more exploitation-probability mass
 (EPSS). Full table: [docs/BENCHMARKS-systems-2026-07-11.md](docs/BENCHMARKS-systems-2026-07-11.md).
 
-**Why CVSS does so badly, honestly:** these images carry hundreds of
-CVSS 9.x "critical" findings, and most known-exploited CVEs score lower
-(often 7–8). A CVSS-sorted budget fills up with 9.x criticals while the
-actually-exploited 7.x ones sit far below the cut. PatchTriage doesn't
-maximize KEV count either — it maximizes *risk* (likelihood × impact × asset
-weight), which is why it catches 63 rather than all 87; the point is that it
-front-loads what is actually being exploited instead of what merely scores
-high. Ground truth is third-party (CISA KEV, FIRST EPSS), so the tool cannot
-grade its own homework.
+**Why CVSS does so badly — and why doubling the budget doesn't save it:**
+these images carry hundreds of CVSS 9.x "critical" findings, while most
+known-exploited CVEs score lower (often 7–8). A CVSS-sorted budget fills up
+with 9.x criticals; the actually-exploited 7.x ones sit far below the cut. So
+even *doubling* the budget barely helps CVSS — it caught **1/87 at 25/system
+and still only 1/87 at 50/system** — while PatchTriage went 63→84. Ground
+truth is third-party (CISA KEV, FIRST EPSS), so the tool cannot grade its own
+homework.
 
 The effect reproduces on other target sets — 18 end-of-life OS/runtime images
 (`targets_eol.txt`) give **1/118 vs 99/118**

@@ -28,12 +28,14 @@ enterprises actually self-host internally — Jenkins, Nextcloud, Redmine,
 Nexus, GitLab-style git servers, Grafana, SonarQube, Mattermost, WordPress —
 not base images or frameworks. Across them, **87 findings are on the CISA
 Known-Exploited-Vulnerabilities list, and CVSS-descending ordering placed
-just 1 of them inside a realistic weekly patch budget of 25 findings per
+just 1 of them inside a realistic weekly patch budget of 50 findings per
 system — missing 99% of what attackers are actively using**. PatchTriage's
-signal-based ordering caught 63 of 87 (72%) with the same budget, and
-captured 2.4x more exploitation-probability mass (FIRST EPSS) overall. (A
-second run over 18 end-of-life OS/runtime images reproduces the effect:
-1 of 118 KEV vs 99 of 118.)
+signal-based ordering caught 84 of 87 (97%) with the same budget, and
+captured 2.6x more exploitation-probability mass (FIRST EPSS) overall.
+Doubling the budget does not rescue CVSS-sorting — it stays at 1 of 87 —
+because known-exploited CVEs rarely carry the top CVSS score and stay buried
+under hundreds of higher-scored "criticals." (A second run over 18
+end-of-life OS/runtime images reproduces the effect: 1 of 118 KEV vs 99.)
 
 The obvious fix — "let an LLM prioritize" — introduces a new problem: how do
 you trust an AI's risk decisions? PatchTriage's answer is an architecture we

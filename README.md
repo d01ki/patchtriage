@@ -372,9 +372,25 @@ TARGETS_FILE=benchmarks/targets_systems.txt SCANNERS=trivy PRUNE=1 \
 ```
 
 `targets_systems.txt` targets the kind of software an enterprise actually
-self-hosts internally — Jenkins, GitLab-style git servers, Nextcloud,
-Mattermost, Grafana, SonarQube, Redmine, Zabbix — rather than base images or
-frameworks, so the benchmark mirrors a real internal estate.
+self-hosts internally — Jenkins, Nextcloud, Redmine, Nexus, Gitea, Grafana,
+SonarQube, Mattermost, WordPress — rather than base images or frameworks, so
+the benchmark mirrors a real internal estate. Results (2026-07-11, budget
+k=25 findings/system):
+
+| System | Findings | KEV@25 CVSS-order | KEV@25 PatchTriage |
+|---|---|---|---|
+| Jenkins 2.319 | 1,267 | 0/10 | **10/10** |
+| Nextcloud 20 | 9,700 | 0/28 | **13/28** |
+| Redmine 4.1 | 9,432 | 0/22 | **18/22** |
+| Nexus 3.30 | 1,936 | 0/9 | **9/9** |
+| WordPress 5.5 | 2,137 | 0/16 | **11/16** |
+| Metabase 0.40 | 349 | 1/2 | **2/2** |
+| + Gitea, Grafana, SonarQube, Mattermost, Ghost | — | 0/0 | 0/0 |
+| **Total (11 systems)** | **~26k** | **1/87** | **63/87** |
+
+**CVSS-descending ordering patched 1 of 87 actively-exploited (CISA-KEV)
+findings inside the budget. PatchTriage caught 63** — and 2.4x the EPSS mass.
+Full table in [docs/BENCHMARKS-systems-2026-07-11.md](docs/BENCHMARKS-systems-2026-07-11.md).
 
 Local `trivy`/`grype` binaries are used when present; otherwise the script
 falls back to pinned `aquasec/trivy` / `anchore/grype` container images, so

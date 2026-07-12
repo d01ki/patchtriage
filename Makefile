@@ -1,10 +1,13 @@
-.PHONY: install demo test docker-demo docker-build
+.PHONY: install demo test docker-demo docker-build gui
 
 install:            ## install with AI backend + dev tools
 	pip install -e ".[ai,dev]"
 
 demo:               ## offline demo: no network, no API keys
 	patchtriage demo
+
+gui:                ## web console in Docker -> http://localhost:8765
+	docker compose up gui
 
 test:
 	python -m pytest tests -q

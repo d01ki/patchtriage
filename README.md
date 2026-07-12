@@ -300,17 +300,7 @@ osv-scanner --format json -r ./repo > osv.json
 Ground truth (`enrichment`) and AI output (`triage`) are separated by design,
 so every decision is auditable against the signals it was made from.
 
-## Cost controls for the Claude backend
-
-* `--triage cascade` routes bulk findings to a screening-tier model and
-  reserves the frontier model for high-signal or audit-flagged findings —
-  typically only a small fraction of a scan escalates.
-* `--batch` uses the Anthropic Message Batches API: 50% of standard token
-  cost, results usually within the hour. Ideal for nightly estate-wide
-  re-triage where latency doesn't matter.
-* `--limit N` triages only the top-N findings after deterministic ranking —
-  the long tail rarely needs frontier reasoning.
-* `--jobs N` controls request parallelism (throughput, not cost).
+## Auditability, planning and reporting
 
 * **Audit** (`triage/audit.py`): every AI decision is machine-verified
   against the deterministic signals it was given. Four checks run on every
@@ -342,15 +332,26 @@ so every decision is auditable against the signals it was made from.
   layer on top.
 * It does not let the LLM produce scores. Ever.
 
-## Benchmark: does it actually beat sorting by CVSS?
+## Benchmark: PatchTriage catches 97% of what's being exploited; CVSS-sorting catches 1%
 
-We ran the pipeline against **11 pinned images of software enterprises
-actually self-host internally** — Jenkins, Nextcloud, Redmine, Nexus, Gitea,
-Grafana, SonarQube, Mattermost, Ghost, Metabase, WordPress — not base images
-or frameworks. At a realistic weekly budget of **k = 50 findings per system**
-(one package upgrade usually closes many findings, so 50 is a light week):
+> **PatchTriage put 84 of 87 actively-exploited vulnerabilities into the same
+> weekly patch queue that the industry-standard "sort by CVSS" approach filled
+> with only 1.** Higher is better; the `1 / 87` column is the *baseline we beat*,
+> not our result.
 
-| System | Findings | KEV@50 — CVSS order | KEV@50 — PatchTriage |
+The setup: a security team can't patch everything at once. Say you can fix
+**50 findings this week** (a "budget" — one package upgrade usually closes
+many findings, so 50 is a light week). Which 50 do you pick? We compare two
+ways of choosing — sort by CVSS (what most teams do today) vs PatchTriage —
+and count how many of the *known-exploited* vulnerabilities (CISA KEV) each
+one's 50 picks actually include.
+
+We ran this against **11 pinned images of software enterprises actually
+self-host internally** — Jenkins, Nextcloud, Redmine, Nexus, Gitea, Grafana,
+SonarQube, Mattermost, Ghost, Metabase, WordPress — not base images or
+frameworks.
+
+| System | Findings | KEV caught — sort-by-CVSS | KEV caught — **PatchTriage** |
 |---|---|---|---|
 | Jenkins 2.319 | 1,267 | 0/10 | **10/10** |
 | Nextcloud 20 | 9,700 | 0/28 | **26/28** |
@@ -359,12 +360,12 @@ or frameworks. At a realistic weekly budget of **k = 50 findings per system**
 | WordPress 5.5 | 2,137 | 0/16 | **16/16** |
 | Metabase 0.40 | 349 | 1/2 | **2/2** |
 | + Gitea, Grafana, SonarQube, Mattermost, Ghost | — | 0/0 | 0/0 |
-| **Total (11 systems, ~26k findings)** | | **1 / 87** | **84 / 87** |
+| **Total (11 systems, ~26k findings)** | | **1 / 87 (1%)** | **84 / 87 (97%)** |
 
-**Across 87 findings that CISA confirms are being exploited in the wild,
-sorting by CVSS put just 1 inside the budget — it missed 99%. PatchTriage
-caught 84 (97%)**, and captured 2.6x more exploitation-probability mass
-(EPSS). Full table: [docs/BENCHMARKS-systems-2026-07-11.md](docs/BENCHMARKS-systems-2026-07-11.md).
+So of the 87 vulnerabilities CISA confirms are being exploited in the wild,
+**PatchTriage's queue contained 84; the CVSS-sorted queue contained 1.**
+PatchTriage also captured 2.6x more exploitation-probability mass (EPSS).
+Full table: [docs/BENCHMARKS-systems-2026-07-11.md](docs/BENCHMARKS-systems-2026-07-11.md).
 
 **Why CVSS does so badly — and why doubling the budget doesn't save it:**
 these images carry hundreds of CVSS 9.x "critical" findings, while most
@@ -374,6 +375,12 @@ even *doubling* the budget barely helps CVSS — it caught **1/87 at 25/system
 and still only 1/87 at 50/system** — while PatchTriage went 63→84. Ground
 truth is third-party (CISA KEV, FIRST EPSS), so the tool cannot grade its own
 homework.
+
+This benchmark runs the **deterministic** backend (`--triage rules`), so the
+97% comes purely from signal-based prioritization — no LLM, fully
+reproducible, nothing to hallucinate. The `claude` / `cascade` AI backends
+sit on top of the *same* signals and add analyst-grade rationales per finding
+(every one machine-audited); they change the explanations, not the numbers.
 
 The effect reproduces on other target sets — 18 end-of-life OS/runtime images
 (`targets_eol.txt`) give **1/118 vs 99/118**

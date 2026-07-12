@@ -19,7 +19,12 @@ LABEL org.opencontainers.image.title="PatchTriage" \
 COPY --from=build /install /usr/local
 RUN useradd --create-home --uid 1000 patchtriage \
     && mkdir -p /out /work \
-    && chown patchtriage:patchtriage /out /work
+       /home/patchtriage/.cache/patchtriage \
+       /home/patchtriage/.config/patchtriage \
+    && chown -R patchtriage:patchtriage /out /work /home/patchtriage
+# Pre-creating + chowning the cache/config dirs means Docker initializes the
+# named volumes mounted there with uid 1000 ownership, so the GUI (which runs
+# as this user) can persist targets, caches and reports.
 USER patchtriage
 WORKDIR /work
 # `docker run patchtriage` runs the fully offline demo by default

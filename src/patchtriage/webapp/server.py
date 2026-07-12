@@ -61,7 +61,30 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     # ------------------------------------------------------------ routing
+    def _guard(self, fn):
+        """Never drop the connection on an unhandled error — return JSON 500
+        so the browser shows a message instead of a dead request."""
+        try:
+            fn()
+        except BrokenPipeError:
+            raise
+        except Exception as exc:
+            try:
+                self._send_json(
+                    {"error": f"{type(exc).__name__}: {exc}"}, 500)
+            except Exception:
+                pass
+
     def do_GET(self):
+        self._guard(self._do_GET)
+
+    def do_POST(self):
+        self._guard(self._do_POST)
+
+    def do_DELETE(self):
+        self._guard(self._do_DELETE)
+
+    def _do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/":
             return self._send(INDEX_HTML.encode("utf-8"))
@@ -79,7 +102,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(b"report not generated yet", status=404)
         return self._send(b"not found", status=404)
 
-    def do_POST(self):
+    def _do_POST(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/targets":
             body = self._read_json()
@@ -124,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._send_json({"error": "not found"}, 404)
 
-    def do_DELETE(self):
+    def _do_DELETE(self):
         m = re.fullmatch(r"/api/targets/([0-9a-f]+)", self.path.split("?", 1)[0])
         if m:
             tstore.delete_target(m.group(1))

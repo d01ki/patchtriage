@@ -1,6 +1,6 @@
 [project]
 name = "patchtriage"
-version = "0.5.0"
+version = "0.5.1"
 description = "AI-assisted vulnerability triage: ingest scanner output, dedup, enrich with EPSS/KEV/NVD, prioritize"
 readme = "README.md"
 requires-python = ">=3.10"

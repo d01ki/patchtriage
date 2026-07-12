@@ -27,11 +27,16 @@ def main(out_dir: str) -> None:
     out = Path(out_dir)
     rows = []
     for report in sorted(out.glob("*__report.json")):
-        image = report.name.replace("__report.json", "").replace("_", ":", 1)
         data = json.loads(report.read_text(encoding="utf-8"))
         findings = [Finding.model_validate(f) for f in data.get("findings", [])]
         if not findings:
             continue
+        # Prefer the real image ref recorded as the asset id (run_benchmark
+        # passes --asset-id <image>); fall back to reconstructing from the
+        # filename for older reports.
+        image = findings[0].asset.identifier
+        if not image or image in ("override", "interactive"):
+            image = report.name.replace("__report.json", "").replace("_", ":", 1)
         r = evaluate(findings, budgets=[BUDGET])[0]
         rows.append((image, len(findings), r))
 

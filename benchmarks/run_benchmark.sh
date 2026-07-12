@@ -124,7 +124,7 @@ for image in "${TARGETS[@]}"; do
 
   echo "==> triaging ${image}"
   if "${PT[@]}" run "${reports[@]}" \
-      --exposed --criticality high \
+      --asset-id "${image}" --exposed --criticality high \
       --triage rules \
       --no-nvd \
       -o "out/${safe}__report.json" \

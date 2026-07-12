@@ -342,42 +342,15 @@ so every decision is auditable against the signals it was made from.
   layer on top.
 * It does not let the LLM produce scores. Ever.
 
-## Benchmarking on real-world targets
+## Benchmark: does it actually beat sorting by CVSS?
 
-`benchmarks/run_benchmark.sh` reproduces the practicality evaluation against
-five widely used public container images (pinned tags: nginx, redis,
-postgres, node, python — millions of pulls each, none of them ours).
-`benchmarks/targets_eol.txt` points the same harness at 18 end-of-life tags
-of famous images (old glibc/sudo/openssl/log4j → lots of known-exploited
-CVEs). At a realistic weekly budget of 25 findings per image (2026-07-11):
+We ran the pipeline against **11 pinned images of software enterprises
+actually self-host internally** — Jenkins, Nextcloud, Redmine, Nexus, Gitea,
+Grafana, SonarQube, Mattermost, Ghost, Metabase, WordPress — not base images
+or frameworks. At a realistic weekly budget of **k = 25 findings per system**
+(2026-07-11):
 
-| Metric (summed over 18 EOL images, 31k findings) | CVSS-order | PatchTriage |
-|---|---|---|
-| CISA-KEV (actively exploited) caught in budget | **1 / 118** | **99 / 118** |
-| EPSS mass (exploitation probability) captured | 97.5 | **236.6** |
-
-**Sorting by CVSS put 1 of 118 known-exploited vulnerabilities inside the
-budget — it missed 99% of the things attackers are actually using.**
-PatchTriage caught 99/118 (84%) with the same budget and 2.4x the EPSS mass.
-Per-image breakdown in [docs/BENCHMARKS-2026-07-11.md](docs/BENCHMARKS-2026-07-11.md).
-Reproduce either set yourself:
-
-```bash
-./benchmarks/run_benchmark.sh                                  # 5 current images
-TARGETS_FILE=benchmarks/targets_eol.txt SCANNERS=trivy \
-  ./benchmarks/run_benchmark.sh                                # 18 EOL images
-TARGETS_FILE=benchmarks/targets_systems.txt SCANNERS=trivy PRUNE=1 \
-  ./benchmarks/run_benchmark.sh                                # self-hosted systems
-# -> benchmarks/out/BENCHMARKS.md with the aggregated comparison table
-```
-
-`targets_systems.txt` targets the kind of software an enterprise actually
-self-hosts internally — Jenkins, Nextcloud, Redmine, Nexus, Gitea, Grafana,
-SonarQube, Mattermost, WordPress — rather than base images or frameworks, so
-the benchmark mirrors a real internal estate. Results (2026-07-11, budget
-k=25 findings/system):
-
-| System | Findings | KEV@25 CVSS-order | KEV@25 PatchTriage |
+| System | Findings | KEV@25 — CVSS order | KEV@25 — PatchTriage |
 |---|---|---|---|
 | Jenkins 2.319 | 1,267 | 0/10 | **10/10** |
 | Nextcloud 20 | 9,700 | 0/28 | **13/28** |
@@ -386,28 +359,47 @@ k=25 findings/system):
 | WordPress 5.5 | 2,137 | 0/16 | **11/16** |
 | Metabase 0.40 | 349 | 1/2 | **2/2** |
 | + Gitea, Grafana, SonarQube, Mattermost, Ghost | — | 0/0 | 0/0 |
-| **Total (11 systems)** | **~26k** | **1/87** | **63/87** |
+| **Total (11 systems, ~26k findings)** | | **1 / 87** | **63 / 87** |
 
-**CVSS-descending ordering patched 1 of 87 actively-exploited (CISA-KEV)
-findings inside the budget. PatchTriage caught 63** — and 2.4x the EPSS mass.
-Full table in [docs/BENCHMARKS-systems-2026-07-11.md](docs/BENCHMARKS-systems-2026-07-11.md).
+**Across 87 findings that CISA confirms are being exploited in the wild,
+sorting by CVSS put just 1 inside the budget — it missed 99%. PatchTriage
+caught 63 (72%)**, and captured 2.4x more exploitation-probability mass
+(EPSS). Full table: [docs/BENCHMARKS-systems-2026-07-11.md](docs/BENCHMARKS-systems-2026-07-11.md).
+
+**Why CVSS does so badly, honestly:** these images carry hundreds of
+CVSS 9.x "critical" findings, and most known-exploited CVEs score lower
+(often 7–8). A CVSS-sorted budget fills up with 9.x criticals while the
+actually-exploited 7.x ones sit far below the cut. PatchTriage doesn't
+maximize KEV count either — it maximizes *risk* (likelihood × impact × asset
+weight), which is why it catches 63 rather than all 87; the point is that it
+front-loads what is actually being exploited instead of what merely scores
+high. Ground truth is third-party (CISA KEV, FIRST EPSS), so the tool cannot
+grade its own homework.
+
+The effect reproduces on other target sets — 18 end-of-life OS/runtime images
+(`targets_eol.txt`) give **1/118 vs 99/118**
+([docs/BENCHMARKS-2026-07-11.md](docs/BENCHMARKS-2026-07-11.md)). Run any set
+yourself:
+
+```bash
+./benchmarks/run_benchmark.sh                                  # 5 current images
+TARGETS_FILE=benchmarks/targets_systems.txt SCANNERS=trivy PRUNE=1 \
+  ./benchmarks/run_benchmark.sh                                # self-hosted systems
+TARGETS_FILE=benchmarks/targets_eol.txt SCANNERS=trivy \
+  ./benchmarks/run_benchmark.sh                                # 18 EOL images
+# -> benchmarks/out/BENCHMARKS.md with the aggregated comparison table
+```
 
 Local `trivy`/`grype` binaries are used when present; otherwise the script
 falls back to pinned `aquasec/trivy` / `anchore/grype` container images, so
-Docker alone is enough to reproduce the numbers. `SCANNERS=trivy` roughly
-halves runtime; `PRUNE=1` removes each image after scanning on large runs.
-
-For each image it scans with Trivy and Grype, runs the full pipeline, and
-reports KEV@k / EPSS@k for CVSS-ordering vs PatchTriage-ordering at a
-realistic weekly budget (k = 25% of findings). Because targets are public and
-tags are pinned, anyone can reproduce the numbers.
+Docker alone reproduces the numbers. `SCANNERS=trivy` roughly halves runtime;
+`PRUNE=1` removes each image after scanning on large runs.
 
 ## Roadmap
 
 * Reachability analysis (is the vulnerable function actually called?)
 * Ecosystem-aware version comparison for multi-fix packages
 * Ticketing integrations (GitHub Issues / Jira)
-* SBOM (CycloneDX/SPDX) ingestion
 
 ## Development
 

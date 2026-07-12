@@ -81,7 +81,9 @@ scan_grype() {  # $1 = target image, $2 = output path
 
 # Targets: from TARGETS_FILE if given, else the default reproducible set.
 if [[ -n "${TARGETS_FILE:-}" ]]; then
-  mapfile -t TARGETS < <(grep -vE '^\s*(#|$)' "$TARGETS_FILE")
+  # strip inline/full-line comments and surrounding whitespace, drop blanks
+  mapfile -t TARGETS < <(sed -E 's/#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' \
+                         "$TARGETS_FILE" | grep -vE '^$')
 else
   TARGETS=(
     "nginx:1.24"

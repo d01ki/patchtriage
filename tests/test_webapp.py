@@ -39,10 +39,12 @@ def server(tmp_path, monkeypatch):
     httpd.server_close()
 
 
-def _req(method, url, body=None):
+def _req(method, url, body=None, headers=None):
     data = json.dumps(body).encode() if body is not None else None
+    request_headers = {"Content-Type": "application/json"}
+    request_headers.update(headers or {})
     req = urllib.request.Request(url, data=data, method=method,
-                                 headers={"Content-Type": "application/json"})
+                                 headers=request_headers)
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             raw = r.read()
@@ -61,9 +63,13 @@ def test_config_lists_rules_backend(server):
 def test_add_and_delete_target(server):
     status, t = _req("POST", server + "/api/targets",
                      {"name": "checkout", "url": "https://example.com",
-                      "criticality": "critical", "internet_exposed": True})
+                      "criticality": "critical", "internet_exposed": True,
+                      "reachable": True, "runtime_observed": True,
+                      "context_sources": ["otel"]})
     assert status == 201
     assert t["name"] == "checkout" and t["url"] == "https://example.com"
+    assert t["reachable"] is True and t["runtime_observed"] is True
+    assert t["context_sources"] == ["otel"]
     _, targets = _req("GET", server + "/api/targets")
     assert len(targets) == 1
     status, _ = _req("DELETE", server + f"/api/targets/{t['id']}")
@@ -72,12 +78,46 @@ def test_add_and_delete_target(server):
     assert targets == []
 
 
+def test_rejects_unsafe_target_url(server):
+    status, response = _req(
+        "POST", server + "/api/targets",
+        {"name": "unsafe", "url": "javascript:alert(1)"},
+    )
+    assert status == 400
+    assert "http:// or https://" in response["error"]
+
+
+def test_rejects_cross_origin_mutation(server):
+    status, response = _req(
+        "POST", server + "/api/targets", {"name": "cross-site"},
+        headers={"Origin": "https://attacker.example"},
+    )
+    assert status == 403
+    assert "cross-origin" in response["error"]
+
+
+def test_security_headers_are_present(server):
+    with urllib.request.urlopen(server + "/") as response:
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+
+
 def test_reject_non_scan_non_sbom(server):
     _, t = _req("POST", server + "/api/targets", {"name": "x"})
     status, resp = _req("POST", server + f"/api/targets/{t['id']}/source",
                         {"content": '{"hello": "world"}', "filename": "x.json"})
     assert status == 400
     assert "unrecognized" in resp["error"]
+
+
+def test_source_requires_existing_target(server):
+    status, response = _req(
+        "POST", server + "/api/targets/000000000000/source",
+        {"content": '{"hello": "world"}', "filename": "x.json"},
+    )
+    assert status == 404
+    assert response["error"] == "no such target"
 
 
 def test_source_detects_sbom_format(server):

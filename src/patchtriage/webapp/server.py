@@ -13,12 +13,21 @@ import re
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 from .. import targets as tstore
 from ..ingest.sbom import is_sbom
 from ..ingest.parsers import sniff_format
 from .page import INDEX_HTML
 from .runner import run_target
+
+MAX_REQUEST_BYTES = 64 * 1024 * 1024
+
+
+class RequestError(ValueError):
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.status = status
 
 
 def _detect_format(content: str) -> str:
@@ -33,11 +42,25 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "PatchTriage"
 
     # ------------------------------------------------------------ helpers
+    def _security_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+            "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
+            "form-action 'self'",
+        )
+
     def _send_json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -45,17 +68,38 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
     def _read_json(self) -> dict:
-        length = int(self.headers.get("Content-Length", 0) or 0)
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].lower()
+        if content_type != "application/json":
+            raise RequestError("Content-Type must be application/json", 415)
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError as exc:
+            raise RequestError("invalid Content-Length") from exc
+        if length < 0 or length > MAX_REQUEST_BYTES:
+            raise RequestError("request body is too large", 413)
         if not length:
             return {}
         try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return {}
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise RequestError("request body must be valid UTF-8 JSON") from exc
+        if not isinstance(body, dict):
+            raise RequestError("request body must be a JSON object")
+        return body
+
+    def _origin_allowed(self) -> bool:
+        """Reject browser cross-site writes while allowing non-browser clients."""
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        parsed = urlsplit(origin)
+        host = self.headers.get("Host", "")
+        return parsed.scheme in ("http", "https") and parsed.netloc.lower() == host.lower()
 
     def log_message(self, *args):  # quiet by default
         pass
@@ -66,6 +110,8 @@ class Handler(BaseHTTPRequestHandler):
         so the browser shows a message instead of a dead request."""
         try:
             fn()
+        except RequestError as exc:
+            self._send_json({"error": str(exc)}, exc.status)
         except BrokenPipeError:
             raise
         except Exception as exc:
@@ -79,9 +125,13 @@ class Handler(BaseHTTPRequestHandler):
         self._guard(self._do_GET)
 
     def do_POST(self):
+        if not self._origin_allowed():
+            return self._send_json({"error": "cross-origin request rejected"}, 403)
         self._guard(self._do_POST)
 
     def do_DELETE(self):
+        if not self._origin_allowed():
+            return self._send_json({"error": "cross-origin request rejected"}, 403)
         self._guard(self._do_DELETE)
 
     def _do_GET(self):
@@ -108,14 +158,23 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_json()
             if not body.get("name"):
                 return self._send_json({"error": "name is required"}, 400)
-            t = tstore.add_target(
-                name=body["name"], url=body.get("url", ""),
-                criticality=body.get("criticality", "unknown"),
-                internet_exposed=bool(body.get("internet_exposed")))
+            try:
+                t = tstore.add_target(
+                    name=body["name"], url=body.get("url", ""),
+                    criticality=body.get("criticality", "unknown"),
+                    internet_exposed=body.get("internet_exposed", False),
+                    reachable=body.get("reachable"),
+                    runtime_observed=body.get("runtime_observed"),
+                    context_sources=body.get("context_sources"),
+                )
+            except ValueError as exc:
+                return self._send_json({"error": str(exc)}, 400)
             return self._send_json(t, 201)
 
         m = re.fullmatch(r"/api/targets/([0-9a-f]+)/source", path)
         if m:
+            if not tstore.get_target(m.group(1)):
+                return self._send_json({"error": "no such target"}, 404)
             body = self._read_json()
             content = body.get("content", "")
             if not content:
@@ -135,6 +194,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"error": "no such target"}, 404)
             body = self._read_json()
             backend = body.get("backend", "rules")
+            allowed = {"rules"}
+            if os.environ.get("ANTHROPIC_API_KEY"):
+                allowed.update(("claude", "cascade"))
+            if backend not in allowed:
+                return self._send_json({"error": "backend is not available"}, 400)
             try:
                 summary = run_target(
                     target, backend=backend,
@@ -150,8 +214,10 @@ class Handler(BaseHTTPRequestHandler):
     def _do_DELETE(self):
         m = re.fullmatch(r"/api/targets/([0-9a-f]+)", self.path.split("?", 1)[0])
         if m:
-            tstore.delete_target(m.group(1))
+            if not tstore.delete_target(m.group(1)):
+                return self._send_json({"error": "no such target"}, 404)
             self.send_response(204)
+            self._security_headers()
             self.end_headers()
             return
         return self._send_json({"error": "not found"}, 404)

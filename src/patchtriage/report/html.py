@@ -90,21 +90,25 @@ def render_html(findings: list[Finding], actions: list[Action],
     if eval_rows:
         body = ""
         for r in eval_rows:
-            better = r.kev_patchtriage >= r.kev_baseline
+            best_kev = max(r.kev_baseline, r.kev_epss, r.kev_patchtriage)
+            best_epss = max(r.epss_baseline, r.epss_epss, r.epss_patchtriage)
             body += f"""
             <tr><td class="num">top {r.k}</td>
-                <td class="num">{r.kev_baseline}/{r.kev_total}</td>
-                <td class="num {'win' if better else ''}">{r.kev_patchtriage}/{r.kev_total}</td>
-                <td class="num">{r.epss_baseline}</td>
-                <td class="num {'win' if r.epss_patchtriage >= r.epss_baseline else ''}">{r.epss_patchtriage}</td></tr>"""
+                <td class="num {'win' if r.kev_baseline == best_kev else ''}">{r.kev_baseline}/{r.kev_total}</td>
+                <td class="num {'win' if r.kev_epss == best_kev else ''}">{r.kev_epss}/{r.kev_total}</td>
+                <td class="num {'win' if r.kev_patchtriage == best_kev else ''}">{r.kev_patchtriage}/{r.kev_total}</td>
+                <td class="num {'win' if r.epss_baseline == best_epss else ''}">{r.epss_baseline}</td>
+                <td class="num {'win' if r.epss_epss == best_epss else ''}">{r.epss_epss}</td>
+                <td class="num {'win' if r.epss_patchtriage == best_epss else ''}">{r.epss_patchtriage}</td></tr>"""
         eval_html = f"""
     <section>
-      <h2>Does this beat sorting by CVSS?</h2>
-      <p class="lede">Same findings, two orderings, fixed work budget k. Metrics are grounded in
-      third-party data (CISA KEV, FIRST EPSS) — the tool cannot grade its own homework.</p>
+      <h2>Does this beat sorting by CVSS or EPSS alone?</h2>
+      <p class="lede">Same findings, three orderings, fixed work budget k. The EPSS-only
+      baseline directly tests the strongest simple alternative. Metrics are grounded in third-party
+      data (CISA KEV, FIRST EPSS) — the tool cannot grade its own homework.</p>
       <table>
-        <thead><tr><th>Budget</th><th>KEV caught — CVSS order</th><th>KEV caught — PatchTriage</th>
-        <th>EPSS captured — CVSS order</th><th>EPSS captured — PatchTriage</th></tr></thead>
+        <thead><tr><th>Budget</th><th>KEV — CVSS</th><th>KEV — EPSS</th><th>KEV — PatchTriage</th>
+        <th>EPSS mass — CVSS</th><th>EPSS mass — EPSS</th><th>EPSS mass — PatchTriage</th></tr></thead>
         <tbody>{body}</tbody>
       </table>
     </section>"""

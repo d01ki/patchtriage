@@ -85,14 +85,15 @@ runs air-gapped.
 ## Proving practicality: the built-in evaluation
 
 Every run ends with an honesty check. For the same findings and a fixed work
-budget k ("you only have time to fix k things this week"), two orderings are
-compared: the industry default (CVSS descending) and PatchTriage's. Metrics
+budget k ("you only have time to fix k things this week"), three orderings are
+compared: the industry default (CVSS descending), the strongest simple
+alternative (EPSS descending), and PatchTriage's. Metrics
 come from third-party ground truth — CISA KEV membership and FIRST EPSS
 probability — so the tool cannot grade its own homework. From the demo:
 
-| Budget | KEV caught — CVSS order | KEV caught — PatchTriage | EPSS captured — CVSS | EPSS — PatchTriage |
-|--------|------------------------|--------------------------|----------------------|--------------------|
-| top 1  | 0/1                    | **1/1**                  | 0.372                | **0.856**          |
+| Budget | KEV — CVSS | KEV — EPSS | KEV — PatchTriage | EPSS mass — CVSS | EPSS mass — EPSS | EPSS mass — PatchTriage |
+|--------|------------|------------|-------------------|------------------|------------------|-------------------------|
+| top 1  | 0/1        | **1/1**    | **1/1**           | 0.372            | **0.856**        | **0.856**               |
 
 With a budget of one fix, CVSS-sorting spends it on the flashy 10.0 while the
 vulnerability being exploited in ransomware campaigns waits. PatchTriage
@@ -142,9 +143,12 @@ against you in the wild.
   `~/.cache/patchtriage` — re-runs are free and the tool works offline after
   the first sync. No API keys required (an NVD key raises rate limits).
 * **Layer 4 — Context** (`context.py`): a small `assets.yaml` inventory
-  (glob rules) teaches the tool which assets are business-critical and
-  internet-exposed. The same CVE on an exposed checkout service and an
-  internal batch box should never rank the same.
+  (glob rules) teaches the tool which assets are business-critical,
+  internet-exposed, statically reachable, or observed at runtime by eBPF,
+  Falco, or OpenTelemetry. Positive reachability/runtime evidence increases
+  confidence; missing telemetry never suppresses risk. The same CVE on an
+  active checkout path and an unknown internal batch box should not rank the
+  same.
 * **Layer 5 — Triage** (`triage/engine.py`): pluggable backends behind one
   interface.
   * `rules` — deterministic baseline (KEV or high-EPSS-and-exposed ⇒ P1, …).
@@ -247,6 +251,9 @@ patchtriage run trivy.json grype.json --triage claude --limit 50
 # Cascade: screen everything with Haiku, escalate only what matters to Opus
 patchtriage run trivy.json grype.json --triage cascade
 
+# Include positive reachability/runtime evidence without an inventory file
+patchtriage run trivy.json --reachable --runtime-observed --exposed
+
 # Bulk overnight re-triage at 50% API cost via the Message Batches API
 patchtriage run trivy.json --triage claude --batch
 
@@ -327,9 +334,10 @@ so every decision is auditable against the signals it was made from.
 
 * It does not apply patches. It decides *what to patch first* and hands the
   plan to your existing mechanisms (apt/WSUS/Ansible/CI).
-* It does not match SBOMs or packages against vulnerability databases — that
-  is your scanner's job (Trivy/Grype/osv-scanner). PatchTriage is the decision
-  layer on top.
+* It is not a full vulnerability scanner. As a convenience path it can resolve
+  CycloneDX/SPDX components through OSV.dev, while production scanner output
+  from Trivy/Grype/osv-scanner remains the preferred input. PatchTriage is the
+  decision layer on top.
 * It does not let the LLM produce scores. Ever.
 
 ## Benchmark: PatchTriage catches 97% of what's being exploited; CVSS-sorting catches 1%

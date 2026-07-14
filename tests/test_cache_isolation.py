@@ -37,9 +37,11 @@ def test_demo_does_not_touch_real_cache(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     result = CliRunner().invoke(
-        app, ["demo", "--html", "d.html", "--output", "d.json"])
+        app, ["demo", "--html", "reports/d.html",
+              "--output", "reports/d.json"])
     assert result.exit_code == 0, result.output
-    assert Path("d.json").exists()
+    assert Path("reports/d.json").exists()
+    assert Path("reports/d.html").exists()
     # The demo ran fully offline against its isolated snapshot, so the real
     # cache dir must not have been created or populated.
     assert not real_cache.exists()

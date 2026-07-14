@@ -69,10 +69,21 @@ def test_rules_backend_low_signal_is_low_priority():
     assert result["priority"] in ("P3", "P4")
 
 
+def test_rules_backend_uses_positive_runtime_evidence():
+    trivy, _ = _load_all()
+    f = dedup(trivy)[0]
+    f.asset.internet_exposed = False
+    f.asset.runtime_observed = True
+    f.enrichment = Enrichment(epss_score=0.6, nvd_cvss_score=8.0)
+    result = RulesBackend().triage(f)
+    assert result["priority"] == "P1"
+    assert "runtime_observed=True" in result["rationale"]
+
+
 # ---------------------------------------------------------------- new layers
 from patchtriage.context import apply_context, load_inventory
 from patchtriage.evalcmp import evaluate
-from patchtriage.plan import build_plan, finding_risk
+from patchtriage.plan import build_plan, finding_risk, risk_factors
 from patchtriage.report.html import render_html
 
 
@@ -97,13 +108,19 @@ def test_context_apply(tmp_path):
     inv = tmp_path / "assets.yaml"
     inv.write_text(
         "assets:\n  - match: 'web-frontend*'\n    criticality: critical\n"
-        "    internet_exposed: true\n")
+        "    internet_exposed: true\n    reachable: true\n"
+        "    runtime_observed: true\n    context_sources: [otel, falco]\n"
+        "    owner: platform-team\n    notes: customer checkout\n")
     trivy, _ = _load_all()
     findings = dedup(trivy)
     n = apply_context(findings, load_inventory(inv))
     assert n == len(findings)
     assert all(f.asset.criticality == "critical" for f in findings)
     assert all(f.asset.internet_exposed for f in findings)
+    assert all(f.asset.reachable for f in findings)
+    assert all(f.asset.runtime_observed for f in findings)
+    assert all(f.asset.context_sources == ["otel", "falco"] for f in findings)
+    assert all(f.asset.owner == "platform-team" for f in findings)
 
 
 def test_plan_ranks_kev_action_first():
@@ -122,11 +139,28 @@ def test_finding_risk_kev_dominates():
     assert finding_risk(libc) > finding_risk(xz)
 
 
+def test_positive_runtime_context_increases_risk_without_suppressing_unknown():
+    findings = _triaged_findings()
+    xz = next(f for f in findings if f.package.name == "xz-utils")
+    xz.asset.internet_exposed = False
+    xz.asset.reachable = None
+    xz.asset.runtime_observed = None
+    baseline = finding_risk(xz)
+    xz.asset.reachable = True
+    xz.asset.runtime_observed = True
+    factors = risk_factors(xz)
+    assert finding_risk(xz) > baseline
+    assert factors["context_multiplier"] == 1.4
+    assert factors["likelihood_source"] == "FIRST EPSS"
+
+
 def test_eval_patchtriage_beats_cvss_at_k1():
     findings = _triaged_findings()
     rows = evaluate(findings, budgets=[1])
     assert rows[0].kev_baseline == 0              # CVSS order misses the KEV
+    assert rows[0].kev_epss == 1                  # strongest simple baseline
     assert rows[0].kev_patchtriage == 1           # we catch it
+    assert rows[0].epss_epss == 0.856
     assert rows[0].epss_patchtriage > rows[0].epss_baseline
 
 
@@ -137,6 +171,7 @@ def test_html_report_renders():
     assert "<!doctype html>" in html
     assert "CVE-2023-4911" in html
     assert "Remediation plan" in html
+    assert "CVSS or EPSS alone" in html
     assert "cdn" not in html.lower()              # must stay self-contained
 
 

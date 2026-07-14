@@ -7,6 +7,9 @@ inventory (simple YAML, checked into your repo) onto findings:
       - match: "web-frontend*"        # glob against asset identifier
         criticality: critical         # business criticality
         internet_exposed: true
+        reachable: true                # static call/dependency analysis
+        runtime_observed: true         # eBPF / Falco / OpenTelemetry evidence
+        context_sources: [otel, falco]
         owner: platform-team
         notes: "customer-facing checkout"
       - match: "batch-*"
@@ -26,6 +29,14 @@ from pathlib import Path
 import yaml
 
 from .models import Finding
+
+
+def _as_bool(value, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError(f"inventory field '{field}' must be true or false")
 
 
 def load_inventory(path: str | Path) -> list[dict]:
@@ -49,7 +60,22 @@ def apply_context(findings: list[Finding], inventory: list[dict]) -> int:
                 if "criticality" in rule:
                     f.asset.criticality = str(rule["criticality"])
                 if "internet_exposed" in rule:
-                    f.asset.internet_exposed = bool(rule["internet_exposed"])
+                    f.asset.internet_exposed = _as_bool(
+                        rule["internet_exposed"], "internet_exposed")
+                if "reachable" in rule:
+                    f.asset.reachable = _as_bool(rule["reachable"], "reachable")
+                if "runtime_observed" in rule:
+                    f.asset.runtime_observed = _as_bool(
+                        rule["runtime_observed"], "runtime_observed")
+                if "context_sources" in rule:
+                    sources = rule["context_sources"]
+                    if isinstance(sources, str):
+                        sources = [sources]
+                    f.asset.context_sources = [str(s) for s in (sources or [])]
+                if "owner" in rule:
+                    f.asset.owner = str(rule["owner"])
+                if "notes" in rule:
+                    f.asset.context_notes = str(rule["notes"])
                 matched += 1
                 break
     return matched

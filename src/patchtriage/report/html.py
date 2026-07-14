@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from ..evalcmp import EvalRow
 from ..models import Finding
-from ..plan import Action, finding_risk
+from ..plan import Action, finding_risk, risk_factors
 
 _PRI_COLOR = {"P1": "#DC2626", "P2": "#D97706", "P3": "#2563EB", "P4": "#6B7280"}
 
@@ -41,6 +41,44 @@ def render_html(findings: list[Finding], actions: list[Action],
             counts.get((f.triage or {}).get("priority", "P4"), 0) + 1
     kev_n = sum(1 for f in findings if f.enrichment.in_cisa_kev)
     total = len(findings)
+
+    explain_html = ""
+    if actions:
+        lead = actions[0]
+        candidates = [f for f in findings if f.key in lead.finding_keys]
+        lead_finding = max(candidates, key=finding_risk) if candidates else None
+        if lead_finding:
+            factors = risk_factors(lead_finding)
+            e = lead_finding.enrichment
+            likelihood = ("CISA KEV confirmed" if e.in_cisa_kev else
+                          f"EPSS {e.epss_score:.3f}" if e.epss_score is not None
+                          else "EPSS unavailable")
+            context_bits = [lead_finding.asset.criticality]
+            if lead_finding.asset.internet_exposed:
+                context_bits.append("internet-exposed")
+            if lead_finding.asset.reachable:
+                context_bits.append("reachable")
+            if lead_finding.asset.runtime_observed:
+                context_bits.append("runtime-observed")
+            explain_html = f"""
+    <section>
+      <h2>Why this action leads</h2>
+      <p class="lede">The decision path is explicit: authoritative threat evidence and measured
+      asset context produce the risk contribution; triage then turns it into a concrete action.</p>
+      <div class="whyflow">
+        <div class="whynode"><span>Likelihood</span><b>{_esc(likelihood)}</b>
+          <small>{_esc(factors['likelihood_source'])}</small></div>
+        <div class="whyop">×</div>
+        <div class="whynode"><span>Impact</span><b>CVSS {_esc(e.nvd_cvss_score or lead_finding.cvss_score or 'n/a')}</b>
+          <small>impact factor {_esc(factors['impact'])}</small></div>
+        <div class="whyop">×</div>
+        <div class="whynode"><span>Asset context</span><b>{_esc(' · '.join(context_bits))}</b>
+          <small>weight {_esc(factors['asset_weight'])}</small></div>
+        <div class="whyop">→</div>
+        <div class="whynode decisionnode"><span>{_esc(lead.top_priority)} decision</span><b>{_esc(lead.summary)}</b>
+          <small>risk reduced {lead.risk_reduced:.3f}</small></div>
+      </div>
+    </section>"""
 
     # segmented priority spine
     spine = ""
@@ -170,7 +208,18 @@ def render_html(findings: list[Finding], actions: list[Action],
   .riskval {{ font-family:ui-monospace, Menlo, monospace; font-size:12px;
               margin-left:8px; color:var(--muted); }}
   .small {{ font-size:12px; color:var(--muted); }}
+  .whyflow {{ display:grid; grid-template-columns:1fr 28px 1fr 28px 1fr 28px 1.35fr;
+              gap:7px; align-items:stretch; }}
+  .whynode {{ background:#fff; border:1px solid var(--rule); border-radius:5px;
+              padding:13px 14px; }}
+  .whynode span {{ display:block; color:var(--muted); font-size:10px;
+                   text-transform:uppercase; letter-spacing:.08em; }}
+  .whynode b {{ display:block; margin:5px 0 2px; font-size:13px; }}
+  .whynode small {{ color:var(--muted); }}
+  .whyop {{ display:flex; align-items:center; justify-content:center; color:#8992A1; }}
+  .decisionnode {{ background:#EEF0FF; border-color:#BFC5FF; }}
   footer {{ text-align:center; color:var(--muted); font-size:12px; padding:20px; }}
+  @media (max-width:900px) {{ .whyflow {{ grid-template-columns:1fr; }} .whyop {{ transform:rotate(90deg); }} }}
   @media (max-width:760px) {{ main, header, .spinewrap {{ padding-left:16px; padding-right:16px; }} }}
 </style></head>
 <body>
@@ -189,6 +238,8 @@ def render_html(findings: list[Finding], actions: list[Action],
     <div class="card"><div class="v">{len(actions)}</div><div class="l">actions close everything</div></div>
     <div class="card"><div class="v">{total}</div><div class="l">unique findings</div></div>
   </div>
+
+  {explain_html}
 
   <section>
     <h2>Remediation plan — highest risk reduced first</h2>

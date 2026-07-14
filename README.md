@@ -187,19 +187,29 @@ patchtriage serve            # opens http://127.0.0.1:8765 in your browser
 ```
 
 Register each internal system as a **target** (name, a **link URL** to its
-dashboard/repo/runbook, business criticality, internet exposure), attach a
-scan or an SBOM per target, and hit **Run all**. You get a per-target result
-board — priority counts, KEV count, top remediation action, audit status —
-where every target name is a **clickable link out to the system**, and each
-result opens its full HTML report. Built for estates with many systems; the
-registry persists under `~/.config/patchtriage`. Standard-library only (no
-web framework), binds to localhost, and the same asset-context logic applies:
-the identical SBOM ranks P1 on an exposed critical service and P2 on an
-internal low-criticality one.
+dashboard/repo/runbook, business criticality, internet exposure, reachability,
+and runtime observations), attach a scan or an SBOM per target, and hit
+**Run all**. You get a per-target decision board with the leading package
+action, CVSS-vs-EPSS-vs-PatchTriage comparison, deterministic risk-factor
+chain, priority counts, KEV count, and audit status. Every target name links
+back to the real system, and every result opens its self-contained HTML report.
+
+For a talk or review, click **Run the offline demo**: bundled Trivy evidence
+and EPSS/KEV/NVD snapshots produce the complete decision flow without network,
+API keys, or prior setup. The demo snapshot is applied in memory and never
+touches the real enrichment cache.
+
+Built for estates with many systems; the registry persists under
+`~/.config/patchtriage`. Standard-library only (no web framework), binds to
+localhost by default, and applies the same context-aware risk model as the CLI.
 
 ```bash
 docker compose up gui        # same console in a container -> http://localhost:8765
 ```
+
+The container port binds to `127.0.0.1` by default. Set
+`PATCHTRIAGE_BIND=0.0.0.0` only when you intentionally place the console
+behind an authenticated network boundary.
 
 ## Interactive setup & guided run
 
@@ -322,13 +332,14 @@ so every decision is auditable against the signals it was made from.
   nobody patches one CVE at a time. Findings are grouped into concrete
   actions ("Upgrade libc6 to X on host Y") and ranked by **risk reduced per
   action** using an explainable model: likelihood (KEV=1.0, else EPSS) x
-  impact (CVSS/10) x asset weight (criticality, exposure).
+  impact (CVSS/10) x asset weight (criticality, exposure, positive
+  reachability/runtime evidence).
 * **Layer 7 — Report** (`report/html.py`): one self-contained HTML file —
-  priority spine, remediation ledger with risk-reduction bars, evaluation
-  table, full findings with rationales. No CDN, opens offline, safe to attach
-  to a ticket or email.
-* **Evaluation** (`evalcmp.py`): the CVSS-vs-PatchTriage comparison described
-  above, computed on every run.
+  priority spine, explainability graph, remediation ledger with risk-reduction
+  bars, evaluation table, full findings with rationales. No CDN, opens offline,
+  safe to attach to a ticket or email.
+* **Evaluation** (`evalcmp.py`): the CVSS-vs-EPSS-vs-PatchTriage comparison
+  described above, computed on every run.
 
 ## What PatchTriage does NOT do
 
@@ -411,7 +422,10 @@ Docker alone reproduces the numbers. `SCANNERS=trivy` roughly halves runtime;
 
 ## Roadmap
 
-* Reachability analysis (is the vulnerable function actually called?)
+* Automatic reachability collectors (manual inventory and runtime evidence are
+  already supported)
+* Vendor advisory connectors (Microsoft MSRC, RHSA, USN, Debian, GHSA)
+* Exploit intelligence connectors (Metasploit and public PoC provenance)
 * Ecosystem-aware version comparison for multi-fix packages
 * Ticketing integrations (GitHub Issues / Jira)
 

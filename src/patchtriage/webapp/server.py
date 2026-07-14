@@ -13,6 +13,7 @@ import re
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import metadata, resources
 from urllib.parse import urlsplit
 
 from .. import targets as tstore
@@ -141,10 +142,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/config":
             has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
             backends = ["rules"] + (["claude", "cascade"] if has_key else [])
-            return self._send_json({"backends": backends, "has_key": has_key})
+            try:
+                version = metadata.version("patchtriage")
+            except metadata.PackageNotFoundError:
+                version = "dev"
+            return self._send_json({
+                "backends": backends,
+                "has_key": has_key,
+                "version": version,
+                "capabilities": ["offline-demo", "epss-baseline",
+                                 "reachability", "runtime-context"],
+            })
         if path == "/api/targets":
             return self._send_json(tstore.load_targets())
-        m = re.fullmatch(r"/report/([0-9a-f]+)", path)
+        m = re.fullmatch(r"/report/([0-9a-f]{12})", path)
         if m:
             rp = tstore.report_path(m.group(1))
             if rp.exists():
@@ -154,6 +165,29 @@ class Handler(BaseHTTPRequestHandler):
 
     def _do_POST(self):
         path = self.path.split("?", 1)[0]
+        if path == "/api/demo":
+            self._read_json()
+            existing = next(
+                (target for target in tstore.load_targets() if target.get("demo")),
+                None,
+            )
+            created = existing is None
+            target = existing or tstore.add_target(
+                name="Arsenal live demo",
+                criticality="critical",
+                internet_exposed=True,
+                reachable=True,
+                runtime_observed=True,
+                context_sources=["OpenTelemetry", "Falco"],
+                demo=True,
+            )
+            fixture = (resources.files("patchtriage") / "data" / "fixtures"
+                       / "trivy_sample.json")
+            tstore.save_source(
+                target["id"], fixture.read_text(encoding="utf-8"), "trivy")
+            target = tstore.get_target(target["id"])
+            return self._send_json(target, 201 if created else 200)
+
         if path == "/api/targets":
             body = self._read_json()
             if not body.get("name"):
@@ -171,7 +205,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"error": str(exc)}, 400)
             return self._send_json(t, 201)
 
-        m = re.fullmatch(r"/api/targets/([0-9a-f]+)/source", path)
+        m = re.fullmatch(r"/api/targets/([0-9a-f]{12})/source", path)
         if m:
             if not tstore.get_target(m.group(1)):
                 return self._send_json({"error": "no such target"}, 404)
@@ -187,7 +221,7 @@ class Handler(BaseHTTPRequestHandler):
             tstore.save_source(m.group(1), content, fmt)
             return self._send_json({"ok": True, "format": fmt})
 
-        m = re.fullmatch(r"/api/targets/([0-9a-f]+)/run", path)
+        m = re.fullmatch(r"/api/targets/([0-9a-f]{12})/run", path)
         if m:
             target = tstore.get_target(m.group(1))
             if not target:
@@ -212,7 +246,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_json({"error": "not found"}, 404)
 
     def _do_DELETE(self):
-        m = re.fullmatch(r"/api/targets/([0-9a-f]+)", self.path.split("?", 1)[0])
+        m = re.fullmatch(
+            r"/api/targets/([0-9a-f]{12})", self.path.split("?", 1)[0])
         if m:
             if not tstore.delete_target(m.group(1)):
                 return self._send_json({"error": "no such target"}, 404)

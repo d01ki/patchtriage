@@ -183,3 +183,42 @@ def enrich(findings: list[Finding], nvd_api_key: str | None = None,
             if progress:
                 progress(i + 1, len(findings))
     return findings
+
+
+def enrich_from_snapshot(findings: list[Finding], epss: dict, kev: dict,
+                         nvd: dict | None = None) -> list[Finding]:
+    """Attach bundled deterministic data without network or shared cache.
+
+    Used by the browser's one-click Arsenal demo. Keeping this path explicit
+    avoids mutating PATCHTRIAGE_CACHE_DIR (process-global state) and prevents a
+    tiny demo catalog from contaminating real enrichment runs.
+    """
+    nvd = nvd or {}
+    now = datetime.now(timezone.utc)
+    for f in findings:
+        e = f.enrichment
+        e.enriched_at = now
+        if not f.vuln_id.startswith("CVE-"):
+            continue
+        row = epss.get(f.vuln_id) or {}
+        e.epss_score = row.get("epss")
+        e.epss_percentile = row.get("percentile")
+        e.sources.append("epss:snapshot")
+        kev_row = kev.get(f.vuln_id)
+        if kev_row:
+            e.in_cisa_kev = True
+            e.kev_ransomware = (
+                kev_row.get("knownRansomwareCampaignUse", "").lower() == "known")
+            e.kev_due_date = kev_row.get("dueDate")
+        e.sources.append("kev:snapshot")
+        nvd_row = nvd.get(f.vuln_id) or {}
+        e.nvd_cvss_score = nvd_row.get("score")
+        e.nvd_cvss_vector = nvd_row.get("vector", "")
+        e.nvd_cvss_version = nvd_row.get("version", "")
+        e.cwe_ids = nvd_row.get("cwes", [])
+        e.exploit_references = [
+            url for url in nvd_row.get("references", [])
+            if any(hint in url.lower() for hint in _EXPLOIT_HINTS)
+        ][:5]
+        e.sources.append("nvd:snapshot")
+    return findings

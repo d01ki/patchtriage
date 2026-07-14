@@ -121,7 +121,8 @@ def add_target(name: str, url: str = "", criticality: str = "unknown",
                internet_exposed: bool = False,
                reachable: bool | None = None,
                runtime_observed: bool | None = None,
-               context_sources: list[str] | None = None) -> dict:
+               context_sources: list[str] | None = None,
+               demo: bool = False) -> dict:
     with _LOCK:
         targets = load_targets()
         target = {
@@ -134,6 +135,7 @@ def add_target(name: str, url: str = "", criticality: str = "unknown",
             "runtime_observed": _clean_bool(
                 runtime_observed, "runtime_observed", optional=True),
             "context_sources": _clean_sources(context_sources),
+            "demo": bool(demo),
             "source_file": "",
             "source_format": "",
             "created_at": time.time(),

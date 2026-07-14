@@ -19,7 +19,7 @@ services:
   gui:
     build: .
     ports:
-      - "${PATCHTRIAGE_PORT:-8765}:8765"
+      - "${PATCHTRIAGE_BIND:-127.0.0.1}:${PATCHTRIAGE_PORT:-8765}:8765"
     environment:
       - ANTHROPIC_API_KEY
       - NVD_API_KEY

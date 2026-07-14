@@ -58,6 +58,7 @@ def test_config_lists_rules_backend(server):
     assert status == 200
     assert cfg["backends"] == ["rules"]
     assert cfg["has_key"] is False
+    assert "offline-demo" in cfg["capabilities"]
 
 
 def test_add_and_delete_target(server):
@@ -98,9 +99,12 @@ def test_rejects_cross_origin_mutation(server):
 
 def test_security_headers_are_present(server):
     with urllib.request.urlopen(server + "/") as response:
+        page = response.read().decode("utf-8")
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
         assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+    assert "Run the offline demo" in page
+    assert "Patch what matters" in page
 
 
 def test_reject_non_scan_non_sbom(server):
@@ -127,6 +131,29 @@ def test_source_detects_sbom_format(server):
                         {"content": content, "filename": "sbom_spdx.json"})
     assert status == 200
     assert resp["format"] == "spdx"
+
+
+def test_offline_arsenal_demo_runs_end_to_end(server):
+    status, target = _req("POST", server + "/api/demo", {})
+    assert status == 201
+    assert target["demo"] is True
+    status, summary = _req(
+        "POST", server + f"/api/targets/{target['id']}/run",
+        {"backend": "rules"},
+    )
+    assert status == 200
+    assert summary["total"] == 3
+    assert summary["kev"] == 1
+    assert summary["comparison"]["kev"] == {
+        "cvss": 0, "epss": 1, "patchtriage": 1,
+    }
+    assert summary["explanation"]["factors"]["runtime_observed"] is True
+    assert summary["duration_ms"] >= 0
+    status, same_target = _req("POST", server + "/api/demo", {})
+    assert status == 200
+    assert same_target["id"] == target["id"]
+    _, targets = _req("GET", server + "/api/targets")
+    assert len(targets) == 1
 
 
 @pytest.mark.network

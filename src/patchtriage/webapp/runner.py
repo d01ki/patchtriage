@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import time
+from importlib import resources
+
 from ..context import apply_context, load_inventory  # noqa: F401 (parity)
 from ..dedup import dedup
-from ..enrich.clients import enrich
+from ..enrich.clients import enrich, enrich_from_snapshot
 from ..evalcmp import evaluate
 from ..ingest.parsers import load_file
 from ..models import Asset
-from ..plan import build_plan
+from ..plan import build_plan, finding_risk, risk_factors
 from ..report.html import render_html
 from ..triage.audit import audit_all
 from ..triage.engine import get_backend, run_triage
@@ -22,6 +26,7 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
     Returns a summary dict and writes the target's HTML report to disk.
     Raises ValueError if the target has no attached scan/SBOM.
     """
+    started = time.perf_counter()
     source = target.get("source_file")
     if not source:
         raise ValueError("no scan or SBOM attached to this target")
@@ -37,7 +42,15 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
     )
     raw = load_file(source, asset=override)
     findings = dedup(raw)
-    enrich(findings, nvd_api_key=nvd_api_key, use_nvd=use_nvd)
+    if target.get("demo"):
+        data = resources.files("patchtriage") / "data"
+        snapshots = {
+            name: json.loads((data / f"demo_{name}.json").read_text(encoding="utf-8"))
+            for name in ("epss", "kev", "nvd")
+        }
+        enrich_from_snapshot(findings, **snapshots)
+    else:
+        enrich(findings, nvd_api_key=nvd_api_key, use_nvd=use_nvd)
 
     be = get_backend(backend)
     run_triage(findings, be, jobs=1 if backend == "rules" else 4)
@@ -55,6 +68,39 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         counts[(f.triage or {}).get("priority", "P4")] += 1
     kev = sum(1 for f in findings if f.enrichment.in_cisa_kev)
     top = actions[0] if actions else None
+    top_candidates = [
+        f for f in findings if top and f.key in top.finding_keys]
+    top_finding = max(top_candidates, key=finding_risk) if top_candidates else None
+    explanation = None
+    if top_finding:
+        e = top_finding.enrichment
+        explanation = {
+            "vuln_id": top_finding.vuln_id,
+            "package": top_finding.package.name,
+            "cvss": e.nvd_cvss_score or top_finding.cvss_score,
+            "epss": e.epss_score,
+            "kev": e.in_cisa_kev,
+            "ransomware": e.kev_ransomware,
+            "has_fix": bool(top_finding.package.fixed_version),
+            "factors": risk_factors(top_finding),
+        }
+    comparison = None
+    if eval_rows:
+        row = eval_rows[0]
+        comparison = {
+            "k": row.k,
+            "kev_total": row.kev_total,
+            "kev": {
+                "cvss": row.kev_baseline,
+                "epss": row.kev_epss,
+                "patchtriage": row.kev_patchtriage,
+            },
+            "epss_mass": {
+                "cvss": row.epss_baseline,
+                "epss": row.epss_epss,
+                "patchtriage": row.epss_patchtriage,
+            },
+        }
 
     return {
         "target_id": target["id"],
@@ -66,7 +112,14 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         "actions": len(actions),
         "audit_verified": audit["verified"],
         "audit_flagged": len(audit["flagged"]),
+        "audit_rate": round(audit["verified"] / len(findings) * 100, 1)
+        if findings else 100.0,
+        "risk_reduced": round(sum(a.risk_reduced for a in actions), 3),
         "top_action": (top.summary if top else ""),
         "top_priority": (top.top_priority if top else ""),
+        "explanation": explanation,
+        "comparison": comparison,
+        "demo": bool(target.get("demo")),
+        "duration_ms": round((time.perf_counter() - started) * 1000),
         "report_url": f"/report/{target['id']}",
     }

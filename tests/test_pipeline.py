@@ -171,6 +171,7 @@ def test_html_report_renders():
     assert "<!doctype html>" in html
     assert "CVE-2023-4911" in html
     assert "Remediation plan" in html
+    assert "Why this action leads" in html
     assert "CVSS or EPSS alone" in html
     assert "cdn" not in html.lower()              # must stay self-contained
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from importlib import resources
 
@@ -20,7 +21,8 @@ from .. import targets as tstore
 
 
 def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
-               nvd_api_key: str | None = None) -> dict:
+               nvd_api_key: str | None = None,
+               vendor_sources: str | None = "auto") -> dict:
     """Ingest -> enrich -> triage -> plan -> report for one target.
 
     Returns a summary dict and writes the target's HTML report to disk.
@@ -50,7 +52,12 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         }
         enrich_from_snapshot(findings, **snapshots)
     else:
-        enrich(findings, nvd_api_key=nvd_api_key, use_nvd=use_nvd)
+        enrich(
+            findings, nvd_api_key=nvd_api_key, use_nvd=use_nvd,
+            vendor_sources=vendor_sources,
+            github_token=(os.environ.get("GITHUB_TOKEN") or
+                          os.environ.get("GH_TOKEN")),
+        )
 
     be = get_backend(backend)
     run_triage(findings, be, jobs=1 if backend == "rules" else 4)
@@ -83,6 +90,10 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
             "ransomware": e.kev_ransomware,
             "has_fix": bool(top_finding.package.fixed_version),
             "factors": risk_factors(top_finding),
+            "advisories": [
+                advisory.model_dump(mode="json")
+                for advisory in e.vendor_advisories[:5]
+            ],
         }
     comparison = None
     if eval_rows:
@@ -102,6 +113,20 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
             },
         }
 
+    advisory_keys = {
+        (advisory.source, advisory.advisory_id)
+        for finding in findings
+        for advisory in finding.enrichment.vendor_advisories
+    }
+    vendor_sources_checked = sorted({
+        source for finding in findings
+        for source in finding.enrichment.vendor_sources_checked
+    })
+    vendor_errors = sorted({
+        error for finding in findings
+        for error in finding.enrichment.vendor_lookup_errors
+    })
+
     return {
         "target_id": target["id"],
         "name": target["name"],
@@ -109,6 +134,9 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         "total": len(findings),
         "counts": counts,
         "kev": kev,
+        "vendor_advisories": len(advisory_keys),
+        "vendor_sources": vendor_sources_checked,
+        "vendor_errors": vendor_errors,
         "actions": len(actions),
         "audit_verified": audit["verified"],
         "audit_flagged": len(audit["flagged"]),

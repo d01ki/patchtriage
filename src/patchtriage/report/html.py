@@ -41,6 +41,16 @@ def render_html(findings: list[Finding], actions: list[Action],
             counts.get((f.triage or {}).get("priority", "P4"), 0) + 1
     kev_n = sum(1 for f in findings if f.enrichment.in_cisa_kev)
     total = len(findings)
+    advisory_keys = {
+        (advisory.source, advisory.advisory_id)
+        for finding in findings
+        for advisory in finding.enrichment.vendor_advisories
+    }
+    advisory_n = len(advisory_keys)
+    vendor_sources = sorted({source for finding in findings
+                             for source in finding.enrichment.vendor_sources_checked})
+    vendor_errors = sorted({error for finding in findings
+                            for error in finding.enrichment.vendor_lookup_errors})
 
     explain_html = ""
     if actions:
@@ -106,11 +116,75 @@ def render_html(findings: list[Finding], actions: list[Action],
               <span class="riskval">{a.risk_reduced:.2f}</span></td>
         </tr>"""
 
+    advisory_rows = ""
+    advisory_seen = set()
+    for finding in findings:
+        for advisory in finding.enrichment.vendor_advisories:
+            key = (finding.vuln_id, advisory.source, advisory.advisory_id)
+            if key in advisory_seen:
+                continue
+            advisory_seen.add(key)
+            label = f"{advisory.source.upper()} · {advisory.advisory_id}"
+            advisory_link = (
+                f'<a href="{_esc(advisory.url)}" target="_blank" '
+                f'rel="noopener">{_esc(label)} ↗</a>'
+                if advisory.url.startswith(("https://", "http://"))
+                else _esc(label)
+            )
+            products = ", ".join(advisory.products[:3])
+            if len(advisory.products) > 3:
+                products += " …"
+            fixes = ", ".join(advisory.fixed_versions[:3]) or "—"
+            if len(advisory.fixed_versions) > 3:
+                fixes += " …"
+            advisory_rows += f"""
+        <tr>
+          <td class="mono">{_esc(finding.vuln_id)}</td>
+          <td class="mono">{advisory_link}</td>
+          <td>{_esc(advisory.title)}</td>
+          <td class="small">{_esc(products or '—')}</td>
+          <td class="mono small">{_esc(fixes)}</td>
+        </tr>"""
+
+    advisory_html = ""
+    if advisory_rows:
+        advisory_html = f"""
+  <section>
+    <h2>Official vendor advisories</h2>
+    <p class="lede">Direct evidence from MSRC, Red Hat, Ubuntu, Debian, and
+    GitHub. These records explain affected products and fixes; they do not
+    inflate the exploitation-likelihood score.</p>
+    <table>
+      <thead><tr><th>CVE</th><th>Advisory</th><th>Title</th><th>Affected products</th><th>Fixed versions</th></tr></thead>
+      <tbody>{advisory_rows}</tbody>
+    </table>
+  </section>"""
+
+    vendor_error_html = ""
+    if vendor_errors:
+        items = "".join(f"<li>{_esc(error)}</li>" for error in vendor_errors)
+        vendor_error_html = f"""
+  <section>
+    <h2>Vendor connector warnings</h2>
+    <p class="lede">Triage completed using the remaining deterministic
+    signals. Retry later to fill these evidence gaps.</p>
+    <ul class="warnings">{items}</ul>
+  </section>"""
+
     finding_rows = ""
     ordered = sorted(findings, key=finding_risk, reverse=True)
     for f in ordered:
         t, e = f.triage or {}, f.enrichment
         p = t.get("priority", "P4")
+        advisory_badges = []
+        for advisory in e.vendor_advisories[:4]:
+            label = f"{advisory.source.upper()}:{advisory.advisory_id}"
+            if advisory.url.startswith(("https://", "http://")):
+                advisory_badges.append(
+                    f'<a href="{_esc(advisory.url)}" target="_blank" '
+                    f'rel="noopener">{_esc(label)}</a>')
+            else:
+                advisory_badges.append(_esc(label))
         finding_rows += f"""
         <tr>
           <td><span class="pri" style="background:{_PRI_COLOR.get(p, '#6B7280')}">{p}</span></td>
@@ -118,8 +192,9 @@ def render_html(findings: list[Finding], actions: list[Action],
           <td class="mono">{_esc(f.package.name)} {_esc(f.package.version)}</td>
           <td class="num">{e.nvd_cvss_score or f.cvss_score or "–"}</td>
           <td class="num">{f"{e.epss_score:.3f}" if e.epss_score is not None else "–"}</td>
-          <td class="num">{"YES" if e.in_cisa_kev else "–"}</td>
-          <td>{_esc(t.get("action", "–"))}</td>
+          <td class="num">{"YES" if e.in_cisa_kev else "—"}</td>
+          <td class="mono small">{'<br>'.join(advisory_badges) or '—'}</td>
+          <td>{_esc(t.get("action", "—"))}</td>
           <td class="mono small">{_esc(f.asset.identifier)}</td>
           <td class="small">{_audit_badge(t)}{_esc((t.get("rationale") or "")[:160])}</td>
         </tr>"""
@@ -208,6 +283,8 @@ def render_html(findings: list[Finding], actions: list[Action],
   .riskval {{ font-family:ui-monospace, Menlo, monospace; font-size:12px;
               margin-left:8px; color:var(--muted); }}
   .small {{ font-size:12px; color:var(--muted); }}
+  .warnings {{ background:#FFF7ED; border:1px solid #FED7AA; color:#9A3412;
+               border-radius:6px; padding:12px 30px; }}
   .whyflow {{ display:grid; grid-template-columns:1fr 28px 1fr 28px 1fr 28px 1.35fr;
               gap:7px; align-items:stretch; }}
   .whynode {{ background:#fff; border:1px solid var(--rule); border-radius:5px;
@@ -235,6 +312,7 @@ def render_html(findings: list[Finding], actions: list[Action],
   <div class="cards">
     <div class="card"><div class="v" style="color:#DC2626">{counts['P1']}</div><div class="l">patch now (P1)</div></div>
     <div class="card"><div class="v">{kev_n}</div><div class="l">exploited in the wild</div></div>
+    <div class="card"><div class="v">{advisory_n}</div><div class="l">vendor advisories</div></div>
     <div class="card"><div class="v">{len(actions)}</div><div class="l">actions close everything</div></div>
     <div class="card"><div class="v">{total}</div><div class="l">unique findings</div></div>
   </div>
@@ -251,14 +329,16 @@ def render_html(findings: list[Finding], actions: list[Action],
     </table>
   </section>
   {eval_html}
+  {advisory_html}
+  {vendor_error_html}
   <section>
     <h2>All findings</h2>
     <table>
       <thead><tr><th>Pri</th><th>CVE</th><th>Package</th><th>CVSS</th><th>EPSS</th>
-      <th>KEV</th><th>Action</th><th>Asset</th><th>Rationale</th></tr></thead>
+      <th>KEV</th><th>Vendor evidence</th><th>Action</th><th>Asset</th><th>Rationale</th></tr></thead>
       <tbody>{finding_rows}</tbody>
     </table>
   </section>
 </main>
-<footer>PatchTriage · signals: FIRST EPSS · CISA KEV · NVD · decisions are auditable against signals</footer>
+<footer>PatchTriage · signals: FIRST EPSS · CISA KEV · NVD{_esc(' · ' + ' · '.join(s.upper() for s in vendor_sources) if vendor_sources else '')} · decisions are auditable against signals</footer>
 </body></html>"""

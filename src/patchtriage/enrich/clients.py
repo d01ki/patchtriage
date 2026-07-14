@@ -1,11 +1,12 @@
 """Layer 3 — Deterministic enrichment.
 
-Three authoritative sources, all free, no API key required (NVD key optional
-for higher rate limits):
+Authoritative exploitation and vendor sources, all free, no API key required
+(NVD/GitHub keys only raise rate limits):
 
   * EPSS  (FIRST.org)      probability a CVE is exploited in the next 30 days
   * CISA KEV               catalog of vulnerabilities known-exploited in the wild
   * NVD                    official CVSS score/vector + CWE
+  * Vendor feeds           MSRC / RHSA / Ubuntu USN / Debian / GHSA
 
 Design rules:
   - These values are ground truth. The LLM (Layer 5) consumes them, never
@@ -146,8 +147,10 @@ def fetch_nvd(cve: str, client: httpx.Client, api_key: str | None = None) -> dic
 
 # ------------------------------------------------------------------ Orchestrator
 def enrich(findings: list[Finding], nvd_api_key: str | None = None,
-           use_nvd: bool = True, progress=None) -> list[Finding]:
-    """Attach EPSS / KEV / NVD data to every Finding in place."""
+           use_nvd: bool = True, progress=None,
+           vendor_sources: str | list[str] | None = None,
+           github_token: str | None = None) -> list[Finding]:
+    """Attach EPSS / KEV / NVD and optional vendor records in place."""
     cves = sorted({f.vuln_id for f in findings if f.vuln_id.startswith("CVE-")})
     now = datetime.now(timezone.utc)
     with httpx.Client() as client:
@@ -182,6 +185,13 @@ def enrich(findings: list[Finding], nvd_api_key: str | None = None,
                 e.sources.append("nvd")
             if progress:
                 progress(i + 1, len(findings))
+        if vendor_sources:
+            # Deferred import keeps vendor adapters out of the fully offline
+            # bundled-snapshot path.
+            from .vendors import enrich_vendor_advisories
+            enrich_vendor_advisories(
+                findings, sources=vendor_sources, github_token=github_token,
+                client=client)
     return findings
 
 

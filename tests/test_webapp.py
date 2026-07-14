@@ -31,6 +31,8 @@ def _free_port():
 def server(tmp_path, monkeypatch):
     monkeypatch.setenv("PATCHTRIAGE_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
     port = _free_port()
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -59,6 +61,11 @@ def test_config_lists_rules_backend(server):
     assert cfg["backends"] == ["rules"]
     assert cfg["has_key"] is False
     assert "offline-demo" in cfg["capabilities"]
+    assert "vendor-advisories" in cfg["capabilities"]
+    assert cfg["connectors"] == {
+        "msrc": "public", "rhsa": "public", "usn": "public",
+        "debian": "public", "ghsa": "public-rate-limit",
+    }
 
 
 def test_add_and_delete_target(server):
@@ -144,6 +151,8 @@ def test_offline_arsenal_demo_runs_end_to_end(server):
     assert status == 200
     assert summary["total"] == 3
     assert summary["kev"] == 1
+    assert summary["vendor_advisories"] == 0
+    assert summary["vendor_sources"] == []
     assert summary["comparison"]["kev"] == {
         "cvss": 0, "epss": 1, "patchtriage": 1,
     }

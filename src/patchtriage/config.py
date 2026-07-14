@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 # keys mirrored into the environment for the SDK / enrichment clients
-ENV_KEYS = ("ANTHROPIC_API_KEY", "NVD_API_KEY")
+ENV_KEYS = ("ANTHROPIC_API_KEY", "NVD_API_KEY", "GITHUB_TOKEN")
 
 ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
 

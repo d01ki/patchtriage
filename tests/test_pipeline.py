@@ -5,7 +5,7 @@ import pytest
 
 from patchtriage.dedup import dedup
 from patchtriage.ingest.parsers import load_file, sniff_format
-from patchtriage.models import Asset, Enrichment
+from patchtriage.models import Asset, Enrichment, VendorAdvisory
 from patchtriage.triage.engine import RulesBackend
 
 FIX = Path(__file__).parent / "fixtures"
@@ -174,6 +174,22 @@ def test_html_report_renders():
     assert "Why this action leads" in html
     assert "CVSS or EPSS alone" in html
     assert "cdn" not in html.lower()              # must stay self-contained
+
+
+def test_html_report_renders_vendor_evidence():
+    findings = _triaged_findings()
+    findings[0].enrichment.vendor_sources_checked = ["debian"]
+    findings[0].enrichment.vendor_advisories = [VendorAdvisory(
+        source="debian", advisory_id=findings[0].vuln_id,
+        title="Debian tracker record",
+        url=f"https://security-tracker.debian.org/tracker/{findings[0].vuln_id}",
+        products=["libc6 (bookworm: resolved)"],
+        fixed_versions=["libc6 bookworm: 2.36-9+deb12u3"],
+    )]
+    html = render_html(findings, build_plan(findings), evaluate(findings))
+    assert "Official vendor advisories" in html
+    assert "DEBIAN" in html
+    assert "2.36-9+deb12u3" in html
 
 
 # ---------------------------------------------------------------- audit layer

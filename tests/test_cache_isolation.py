@@ -45,3 +45,18 @@ def test_demo_does_not_touch_real_cache(tmp_path, monkeypatch):
     # The demo ran fully offline against its isolated snapshot, so the real
     # cache dir must not have been created or populated.
     assert not real_cache.exists()
+
+
+def test_demo_restores_existing_cache_override(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from patchtriage.cli import app
+
+    configured = tmp_path / "configured_cache"
+    monkeypatch.setenv("PATCHTRIAGE_CACHE_DIR", str(configured))
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        app, ["demo", "--html", "d.html", "--output", "d.json"])
+    assert result.exit_code == 0, result.output
+    assert clients.cache_dir() == configured
+    assert not configured.exists()

@@ -10,7 +10,7 @@ Risk model (deterministic, explainable):
     finding_risk = exploitation_likelihood x impact x asset_weight
       exploitation_likelihood = 1.0 if KEV else EPSS (floor 0.01)
       impact                  = CVSS/10 (fallback: severity ladder)
-      asset_weight            = criticality x exposure multiplier
+      asset_weight            = criticality x exposure/context multiplier
 """
 
 from __future__ import annotations
@@ -30,15 +30,48 @@ _CRIT_WEIGHT = {"critical": 2.0, "high": 1.5, "medium": 1.0,
 _PRIORITY_RANK = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
 
 
-def finding_risk(f: Finding) -> float:
+def risk_factors(f: Finding) -> dict[str, float | bool | str]:
+    """Return the exact factors behind a finding's risk score.
+
+    Positive reachability/runtime evidence raises confidence that a finding is
+    operationally relevant. Missing or negative evidence never suppresses risk:
+    telemetry can be incomplete or stale, so it is unsafe to treat silence as
+    proof that a vulnerable path cannot execute.
+    """
     e = f.enrichment
     likelihood = 1.0 if e.in_cisa_kev else max(e.epss_score or 0.0, 0.01)
     score = e.nvd_cvss_score or f.cvss_score
     impact = (score / 10.0) if score else _SEV_IMPACT[f.severity]
-    weight = _CRIT_WEIGHT.get(f.asset.criticality, 1.0)
+    criticality_weight = _CRIT_WEIGHT.get(f.asset.criticality, 1.0)
+    context_multiplier = 1.0
     if f.asset.internet_exposed:
-        weight *= 1.5
-    return round(likelihood * impact * weight, 4)
+        context_multiplier += 0.5
+    if f.asset.reachable is True:
+        context_multiplier += 0.25
+    if f.asset.runtime_observed is True:
+        context_multiplier += 0.15
+    asset_weight = criticality_weight * context_multiplier
+    return {
+        "likelihood": likelihood,
+        "likelihood_source": "CISA KEV" if e.in_cisa_kev else "FIRST EPSS",
+        "impact": impact,
+        "criticality_weight": criticality_weight,
+        "context_multiplier": context_multiplier,
+        "asset_weight": asset_weight,
+        "internet_exposed": f.asset.internet_exposed is True,
+        "reachable": f.asset.reachable is True,
+        "runtime_observed": f.asset.runtime_observed is True,
+    }
+
+
+def finding_risk(f: Finding) -> float:
+    factors = risk_factors(f)
+    return round(
+        float(factors["likelihood"])
+        * float(factors["impact"])
+        * float(factors["asset_weight"]),
+        4,
+    )
 
 
 class Action(BaseModel):

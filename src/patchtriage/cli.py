@@ -135,8 +135,10 @@ def _emit(findings, subset, actions, eval_rows, output, html):
     _print_actions(actions)
     _print_eval(eval_rows)
     if html:
-        Path(html).write_text(render_html(subset, actions, eval_rows),
-                              encoding="utf-8")
+        html_path = Path(html)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        html_path.write_text(render_html(subset, actions, eval_rows),
+                             encoding="utf-8")
         console.print(f"HTML report: [bold]{html}[/bold]")
     if output:
         report = {
@@ -144,8 +146,10 @@ def _emit(findings, subset, actions, eval_rows, output, html):
             "actions": [a.model_dump(mode="json") for a in actions],
             "evaluation": [r.model_dump(mode="json") for r in eval_rows],
         }
-        Path(output).write_text(json.dumps(report, indent=2, default=str),
-                                encoding="utf-8")
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(report, indent=2, default=str),
+                               encoding="utf-8")
         console.print(f"JSON report: [bold]{output}[/bold]")
 
 
@@ -158,7 +162,14 @@ def run(
     assets: Optional[Path] = typer.Option(None, help="Asset inventory YAML (Layer 4)"),
     asset_id: Optional[str] = typer.Option(None, help="Override asset identifier"),
     criticality: str = typer.Option("unknown", help="Asset criticality override"),
-    exposed: bool = typer.Option(False, "--exposed", help="Asset is internet-exposed"),
+    exposed: Optional[bool] = typer.Option(
+        None, "--exposed/--not-exposed", help="Asset internet exposure evidence"),
+    reachable: Optional[bool] = typer.Option(
+        None, "--reachable/--not-reachable",
+        help="Static analysis says the vulnerable path is reachable"),
+    runtime_observed: Optional[bool] = typer.Option(
+        None, "--runtime-observed/--not-runtime-observed",
+        help="eBPF/Falco/OpenTelemetry observed the component or path at runtime"),
     no_nvd: bool = typer.Option(False, help="Skip NVD (faster; EPSS/KEV only)"),
     nvd_api_key: Optional[str] = typer.Option(None, envvar="NVD_API_KEY"),
     triage: Optional[str] = typer.Option(
@@ -179,9 +190,12 @@ def run(
     """Ingest -> dedup -> context -> enrich -> triage -> plan -> report."""
     triage = triage or cfgmod.load().get("default_backend") or "rules"
     override = None
-    if asset_id or exposed or criticality != "unknown":
+    if (asset_id or exposed is not None or reachable is not None
+            or runtime_observed is not None or criticality != "unknown"):
         override = Asset(identifier=asset_id or "override", kind="host",
-                         criticality=criticality, internet_exposed=exposed)
+                         criticality=criticality, internet_exposed=exposed,
+                         reachable=reachable,
+                         runtime_observed=runtime_observed)
     findings, subset, actions, eval_rows = _pipeline(
         files, fmt, override, assets, not no_nvd, nvd_api_key, triage, model,
         limit, escalation_model=escalation_model, jobs=jobs, batch=batch)
@@ -463,14 +477,27 @@ def _print_actions(actions) -> None:
 
 
 def _print_eval(rows) -> None:
-    table = Table(title="Practicality check: CVSS-order vs PatchTriage-order")
-    for col in ("Budget", "KEV@k CVSS", "KEV@k PT", "EPSS@k CVSS", "EPSS@k PT"):
+    table = Table(title="Practicality check: CVSS vs EPSS vs PatchTriage")
+    for col in ("Budget", "KEV CVSS", "KEV EPSS", "KEV PT",
+                "EPSS mass CVSS", "EPSS mass EPSS", "EPSS mass PT"):
         table.add_column(col)
     for r in rows:
-        pt_kev = f"[bold green]{r.kev_patchtriage}/{r.kev_total}[/bold green]" \
-            if r.kev_patchtriage >= r.kev_baseline else f"{r.kev_patchtriage}/{r.kev_total}"
-        table.add_row(f"top {r.k}", f"{r.kev_baseline}/{r.kev_total}", pt_kev,
-                      str(r.epss_baseline), str(r.epss_patchtriage))
+        best_kev = max(r.kev_baseline, r.kev_epss, r.kev_patchtriage)
+        best_epss = max(r.epss_baseline, r.epss_epss, r.epss_patchtriage)
+
+        def best(value, maximum, text):
+            return f"[bold green]{text}[/bold green]" if value == maximum else text
+
+        table.add_row(
+            f"top {r.k}",
+            best(r.kev_baseline, best_kev, f"{r.kev_baseline}/{r.kev_total}"),
+            best(r.kev_epss, best_kev, f"{r.kev_epss}/{r.kev_total}"),
+            best(r.kev_patchtriage, best_kev,
+                 f"{r.kev_patchtriage}/{r.kev_total}"),
+            best(r.epss_baseline, best_epss, str(r.epss_baseline)),
+            best(r.epss_epss, best_epss, str(r.epss_epss)),
+            best(r.epss_patchtriage, best_epss, str(r.epss_patchtriage)),
+        )
     console.print(table)
 
 

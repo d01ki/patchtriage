@@ -31,6 +31,9 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         kind="sbom" if target.get("source_format") in ("cyclonedx", "spdx") else "host",
         criticality=target.get("criticality", "unknown"),
         internet_exposed=bool(target.get("internet_exposed")),
+        reachable=target.get("reachable"),
+        runtime_observed=target.get("runtime_observed"),
+        context_sources=target.get("context_sources") or [],
     )
     raw = load_file(source, asset=override)
     findings = dedup(raw)

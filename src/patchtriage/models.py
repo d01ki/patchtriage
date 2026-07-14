@@ -53,6 +53,11 @@ class Asset(BaseModel):
     kind: str = "unknown"        # host | container_image | repository | ...
     criticality: str = "unknown" # business criticality: critical|high|medium|low|unknown
     internet_exposed: Optional[bool] = None
+    reachable: Optional[bool] = None         # vulnerable code path is statically reachable
+    runtime_observed: Optional[bool] = None  # component/path observed by eBPF/Falco/OTel
+    context_sources: list[str] = Field(default_factory=list)
+    owner: str = ""
+    context_notes: str = ""
 
 
 class RawFinding(BaseModel):

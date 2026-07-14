@@ -4,9 +4,10 @@ Claim to prove: ordering work by PatchTriage priority front-loads *actually
 exploited* vulnerabilities better than the industry-default CVSS-descending
 order.
 
-Method: for the same finding set, produce two orderings —
-    baseline  : CVSS descending (ties: severity)
-    patchtriage: triage priority, then deterministic risk score
+Method: for the same finding set, produce three orderings —
+    CVSS baseline: CVSS descending
+    EPSS baseline: EPSS descending (the strongest simple alternative)
+    patchtriage  : triage priority, then deterministic risk score
 and compare, at each budget k ("you only have time to fix k findings"):
 
     KEV@k    — how many known-exploited (CISA KEV) findings are inside top-k
@@ -27,9 +28,11 @@ from .plan import _PRIORITY_RANK, finding_risk
 class EvalRow(BaseModel):
     k: int
     kev_baseline: int
+    kev_epss: int
     kev_patchtriage: int
     kev_total: int
     epss_baseline: float
+    epss_epss: float
     epss_patchtriage: float
     epss_total: float
 
@@ -52,9 +55,21 @@ def _order_patchtriage(findings: list[Finding]) -> list[Finding]:
     )
 
 
+def _order_epss(findings: list[Finding]) -> list[Finding]:
+    return sorted(
+        findings,
+        key=lambda f: (
+            f.enrichment.epss_score or 0.0,
+            f.enrichment.nvd_cvss_score or f.cvss_score or 0.0,
+        ),
+        reverse=True,
+    )
+
+
 def evaluate(findings: list[Finding],
              budgets: list[int] | None = None) -> list[EvalRow]:
     base = _order_baseline(findings)
+    epss_order = _order_epss(findings)
     ours = _order_patchtriage(findings)
     kev_total = sum(1 for f in findings if f.enrichment.in_cisa_kev)
     epss_total = sum(f.enrichment.epss_score or 0.0 for f in findings)
@@ -67,9 +82,11 @@ def evaluate(findings: list[Finding],
         rows.append(EvalRow(
             k=k,
             kev_baseline=sum(1 for f in base[:k] if f.enrichment.in_cisa_kev),
+            kev_epss=sum(1 for f in epss_order[:k] if f.enrichment.in_cisa_kev),
             kev_patchtriage=sum(1 for f in ours[:k] if f.enrichment.in_cisa_kev),
             kev_total=kev_total,
             epss_baseline=round(sum(f.enrichment.epss_score or 0 for f in base[:k]), 3),
+            epss_epss=round(sum(f.enrichment.epss_score or 0 for f in epss_order[:k]), 3),
             epss_patchtriage=round(sum(f.enrichment.epss_score or 0 for f in ours[:k]), 3),
             epss_total=round(epss_total, 3),
         ))

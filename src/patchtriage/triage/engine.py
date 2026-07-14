@@ -35,7 +35,7 @@ TRIAGE_SYSTEM_PROMPT = """\
 You are a vulnerability-management analyst performing patch triage.
 You will receive ONE finding as JSON containing deterministic signals
 (severity, CVSS, EPSS probability, CISA KEV status, exploit references,
-fix availability, asset criticality/exposure).
+fix availability, asset criticality/exposure, reachability/runtime evidence).
 
 Rules:
 - NEVER invent or adjust numeric scores. Reason only from the given signals.
@@ -79,11 +79,13 @@ class RulesBackend:
         score = e.nvd_cvss_score or f.cvss_score or 0.0
         epss = e.epss_score or 0.0
         exposed = f.asset.internet_exposed is True
+        runtime_relevant = (f.asset.reachable is True
+                            or f.asset.runtime_observed is True)
         has_fix = bool(f.package.fixed_version)
 
-        if e.in_cisa_kev or (epss >= 0.5 and exposed):
+        if e.in_cisa_kev or (epss >= 0.5 and (exposed or runtime_relevant)):
             prio, days = "P1", 3 if e.kev_ransomware else 7
-        elif epss >= 0.1 or (score >= 9.0 and exposed):
+        elif epss >= 0.1 or (score >= 9.0 and (exposed or runtime_relevant)):
             prio, days = "P2", 14
         elif score >= 7.0:
             prio, days = "P3", 30
@@ -99,7 +101,10 @@ class RulesBackend:
             "priority": prio, "action": action,
             "suggested_deadline_days": days,
             "rationale": (f"rules: cvss={score}, epss={epss_str}, "
-                          f"kev={e.in_cisa_kev}, exposed={exposed}, fix={has_fix}"),
+                          f"kev={e.in_cisa_kev}, exposed={exposed}, "
+                          f"reachable={f.asset.reachable}, "
+                          f"runtime_observed={f.asset.runtime_observed}, "
+                          f"fix={has_fix}"),
             "backend": "rules",
         }
 

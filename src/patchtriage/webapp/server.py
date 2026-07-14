@@ -151,7 +151,15 @@ class Handler(BaseHTTPRequestHandler):
                 "has_key": has_key,
                 "version": version,
                 "capabilities": ["offline-demo", "epss-baseline",
-                                 "reachability", "runtime-context"],
+                                 "reachability", "runtime-context",
+                                 "vendor-advisories"],
+                "connectors": {
+                    "msrc": "public", "rhsa": "public", "usn": "public",
+                    "debian": "public",
+                    "ghsa": ("token" if (os.environ.get("GITHUB_TOKEN") or
+                                           os.environ.get("GH_TOKEN"))
+                             else "public-rate-limit"),
+                },
             })
         if path == "/api/targets":
             return self._send_json(tstore.load_targets())

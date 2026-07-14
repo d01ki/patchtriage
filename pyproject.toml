@@ -1,7 +1,7 @@
 [project]
 name = "patchtriage"
-version = "0.5.1"
-description = "AI-assisted vulnerability triage: ingest scanner output, dedup, enrich with EPSS/KEV/NVD, prioritize"
+version = "0.6.0"
+description = "AI-assisted vulnerability triage with exploitation intelligence and official vendor advisories"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}

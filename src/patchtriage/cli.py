@@ -66,7 +66,7 @@ def _load_config() -> None:
 
 def _pipeline(files, fmt, asset_override, inventory_path, use_nvd, nvd_api_key,
               triage_backend, model, limit, escalation_model=None, jobs=4,
-              batch=False):
+              batch=False, vendor_sources="auto", github_token=None):
     # Layer 1 - ingest
     raw = []
     for f in files:
@@ -87,8 +87,10 @@ def _pipeline(files, fmt, asset_override, inventory_path, use_nvd, nvd_api_key,
                       f"from {inventory_path}[/dim]")
 
     # Layer 3 - enrich
-    with console.status("enriching with EPSS / CISA KEV / NVD..."):
-        enrich(findings, nvd_api_key=nvd_api_key, use_nvd=use_nvd)
+    source_label = " + vendor advisories" if vendor_sources else ""
+    with console.status(f"enriching with EPSS / CISA KEV / NVD{source_label}..."):
+        enrich(findings, nvd_api_key=nvd_api_key, use_nvd=use_nvd,
+               vendor_sources=vendor_sources, github_token=github_token)
 
     # Layer 5 - triage
     subset = findings[:limit] if limit else findings
@@ -170,8 +172,17 @@ def run(
     runtime_observed: Optional[bool] = typer.Option(
         None, "--runtime-observed/--not-runtime-observed",
         help="eBPF/Falco/OpenTelemetry observed the component or path at runtime"),
-    no_nvd: bool = typer.Option(False, help="Skip NVD (faster; EPSS/KEV only)"),
+    no_nvd: bool = typer.Option(
+        False, "--no-nvd", help="Skip NVD (faster; EPSS/KEV only)"),
     nvd_api_key: Optional[str] = typer.Option(None, envvar="NVD_API_KEY"),
+    vendor_sources: str = typer.Option(
+        "auto", help="Vendor advisories: auto|all|msrc,rhsa,usn,debian,ghsa"),
+    no_vendor_advisories: bool = typer.Option(
+        False, "--no-vendor-advisories",
+        help="Skip Microsoft/RHSA/USN/Debian/GHSA lookups"),
+    github_token: Optional[str] = typer.Option(
+        None, envvar="GITHUB_TOKEN",
+        help="Optional GitHub token (raises GHSA API rate limits)"),
     triage: Optional[str] = typer.Option(
         None, help="Triage backend: rules|claude|cascade "
                    "(default: your `patchtriage setup` choice, else rules)"),
@@ -198,7 +209,9 @@ def run(
                          runtime_observed=runtime_observed)
     findings, subset, actions, eval_rows = _pipeline(
         files, fmt, override, assets, not no_nvd, nvd_api_key, triage, model,
-        limit, escalation_model=escalation_model, jobs=jobs, batch=batch)
+        limit, escalation_model=escalation_model, jobs=jobs, batch=batch,
+        vendor_sources=None if no_vendor_advisories else vendor_sources,
+        github_token=github_token or os.environ.get("GH_TOKEN"))
     _emit(findings, subset, actions, eval_rows, output, html)
 
 
@@ -250,7 +263,17 @@ def setup():
     if nvd:
         cfg["NVD_API_KEY"] = nvd
 
-    # 3. Default triage backend
+    # 3. GitHub token (optional - public GHSA works without one)
+    current_github = cfg.get("GITHUB_TOKEN", "")
+    label = "GitHub token (optional, raises GHSA advisory rate limits)"
+    if current_github:
+        label += f" [current: {cfgmod.mask(current_github)}]"
+    github = typer.prompt(label, default="", show_default=False,
+                          hide_input=hidden).strip()
+    if github:
+        cfg["GITHUB_TOKEN"] = github
+
+    # 4. Default triage backend
     has_key = bool(cfg.get("ANTHROPIC_API_KEY"))
     choices = ["rules", "claude", "cascade"] if has_key else ["rules"]
     default_backend = cfg.get("default_backend",
@@ -357,7 +380,10 @@ def start():
     try:
         findings, subset, actions, eval_rows = _pipeline(
             files, None, override, inventory, use_nvd,
-            os.environ.get("NVD_API_KEY"), backend, None, None)
+            os.environ.get("NVD_API_KEY"), backend, None, None,
+            vendor_sources="auto",
+            github_token=(os.environ.get("GITHUB_TOKEN") or
+                          os.environ.get("GH_TOKEN")))
     except ValueError as exc:  # unrecognized format
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
@@ -404,7 +430,7 @@ def serve(
                                     help="Don't auto-open a browser"),
 ):
     """Launch the local web console (GUI): register targets, import scans /
-    SBOMs, run triage, and browse reports — each target links out to its
+    SBOMs, run triage, and browse reports - each target links out to its
     system."""
     from .webapp import serve as _serve
     open_browser = not (no_browser or _is_headless())
@@ -435,6 +461,7 @@ def demo(
                      ("demo_nvd.json", "nvd.json")):
         (demo_cache / dst).write_text((data / src).read_text(encoding="utf-8"),
                                       encoding="utf-8")
+    previous_cache_dir = os.environ.get("PATCHTRIAGE_CACHE_DIR")
     os.environ["PATCHTRIAGE_CACHE_DIR"] = str(demo_cache)
     console.print("[dim]using isolated offline enrichment snapshot in "
                   f"{demo_cache}[/dim]")
@@ -452,10 +479,14 @@ def demo(
 
     try:
         findings, subset, actions, eval_rows = _pipeline(
-            files, None, None, assets_yaml, True, None, "rules", None, None)
+            files, None, None, assets_yaml, True, None, "rules", None, None,
+            vendor_sources=None)
         _emit(findings, subset, actions, eval_rows, output, html)
     finally:
-        os.environ.pop("PATCHTRIAGE_CACHE_DIR", None)
+        if previous_cache_dir is None:
+            os.environ.pop("PATCHTRIAGE_CACHE_DIR", None)
+        else:
+            os.environ["PATCHTRIAGE_CACHE_DIR"] = previous_cache_dir
         shutil.rmtree(tmp, ignore_errors=True)
     console.print("\n[bold green]Demo complete.[/bold green] Open "
                   f"[bold]{html}[/bold] in a browser. To try the AI backend: "

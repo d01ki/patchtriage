@@ -10,7 +10,8 @@ Frontier AI models and automated scanners now surface vulnerabilities faster
 than any team can patch them. The bottleneck has moved from *finding*
 vulnerabilities to *deciding what to fix first*. PatchTriage ingests raw
 scanner output, deduplicates findings across tools, enriches them with
-authoritative exploitation signals (EPSS, CISA KEV, NVD), and then applies an
+authoritative exploitation signals (EPSS, CISA KEV, NVD) and official vendor
+advisories (Microsoft, Red Hat, Ubuntu, Debian, GitHub), and then applies an
 analyst-grade reasoning layer — either deterministic rules or a frontier LLM —
 to produce a defensible, prioritized patch plan.
 
@@ -58,6 +59,18 @@ pip install -e .            # in a venv; on Debian/Ubuntu: python3 -m venv .venv
 patchtriage demo           # offline demo -> demo_report.html
 patchtriage serve          # the same web console, natively
 ```
+
+On Windows PowerShell, from this repository:
+
+```powershell
+.\.venv\Scripts\patchtriage.exe serve
+# Your browser opens automatically at http://127.0.0.1:8765
+```
+
+If the editable console script has not been installed yet, use
+`.\.venv\Scripts\python.exe -m patchtriage.cli serve`. Add `--no-browser` when
+you only want the URL printed. The **Run the offline demo** button needs no
+API key or network access.
 
 The demo ships with real Trivy/Grype output samples and offline snapshots of
 EPSS / CISA KEV / NVD data, so the entire pipeline — ingest, dedup, context,
@@ -122,7 +135,7 @@ against you in the wild.
 │ Trivy JSON    │   │ [1] Ingest    → normalize to one schema  │
 │ Grype JSON    ├──▶│ [2] Dedup     → merge across scanners    │
 │ osv-scanner   │   │               (CVE/GHSA alias graph)     │
-│ (pluggable)   │   │ [3] Enrich    → EPSS · CISA KEV · NVD    │
+│ (pluggable)   │   │ [3] Enrich    → EPSS · KEV · NVD + vendor│
 └───────────────┘   │               (deterministic, cached)    │
                     │ [4] Context   → asset criticality/expo.  │
                     │ [5] AI triage → rules | claude backend   │
@@ -137,11 +150,15 @@ against you in the wild.
   Trivy `CVE-2021-23337` and a Grype `GHSA-35jh-…` merge into one finding.
   Merge policy is conservative: max severity/CVSS wins, sources are unioned,
   nothing is silently dropped.
-* **Layer 3 — Enrich** (`enrich/clients.py`): batch EPSS lookups, the full
-  CISA KEV catalog (incl. ransomware-campaign flags and due dates), and NVD
-  CVSS/CWE/exploit-reference data. Everything is cached in
+* **Layer 3 — Enrich** (`enrich/clients.py`, `enrich/vendors.py`): batch EPSS
+  lookups, the full CISA KEV catalog (incl. ransomware-campaign flags and due
+  dates), NVD CVSS/CWE/exploit-reference data, and normalized records from
+  Microsoft MSRC, Red Hat RHSA, Ubuntu USN, Debian Security Tracker, and the
+  GitHub Advisory Database. Everything is cached in
   `~/.cache/patchtriage` — re-runs are free and the tool works offline after
-  the first sync. No API keys required (an NVD key raises rate limits).
+  the first sync. Individual vendor outages are recorded per finding and do
+  not abort triage. No API keys are required (NVD/GitHub keys raise rate
+  limits). Vendor presence is evidence, not an automatic risk-score boost.
 * **Layer 4 — Context** (`context.py`): a small `assets.yaml` inventory
   (glob rules) teaches the tool which assets are business-critical,
   internet-exposed, statically reachable, or observed at runtime by eBPF,
@@ -255,6 +272,13 @@ patchtriage run trivy.json grype.json --exposed --criticality high -o report.jso
 # Skip NVD for speed (EPSS + KEV only)
 patchtriage run trivy.json --no-nvd
 
+# Vendor feeds are selected from package/distro metadata by default
+patchtriage run trivy.json --vendor-sources auto
+
+# Force a cross-vendor lookup, or disable vendor lookups for a benchmark
+patchtriage run trivy.json --vendor-sources all
+patchtriage run trivy.json --no-vendor-advisories
+
 # Frontier-AI triage (key from `patchtriage setup` or ANTHROPIC_API_KEY)
 patchtriage run trivy.json grype.json --triage claude --limit 50
 
@@ -272,6 +296,26 @@ patchtriage run trivy.json --triage cascade --jobs 8 \
     --model claude-haiku-4-5 --escalation-model claude-opus-4-8
 ```
 
+### Official vendor advisory connectors
+
+`--vendor-sources auto` (the default) selects feeds from package ecosystem and
+distro metadata. `--vendor-sources all` queries every connector for each CVE,
+which is useful for research but slower. Results and negative lookups are
+cached for 24 hours; the Debian full tracker feed is downloaded at most once
+per cache window.
+
+| Source | Public endpoint | Normalized evidence |
+|---|---|---|
+| [Microsoft MSRC](https://github.com/microsoft/MSRC-Microsoft-Security-Updates-API) | CVRF API v3 | update document and CVRF link |
+| [Red Hat RHSA](https://docs.redhat.com/en/documentation/red_hat_security_data_api/1.0/html-single/red_hat_security_data_api/red_hat_security_data_api) | Security Data CSAF API | RHSA, severity, released packages |
+| [Ubuntu USN](https://documentation.ubuntu.com/security/security-updates/osv/) | Ubuntu OSV records | USN, affected packages, fixed versions |
+| [Debian](https://www.debian.org/security/index) | Security Tracker JSON | release status and fixed versions |
+| [GitHub GHSA](https://docs.github.com/en/rest/security-advisories/global-advisories) | Global Security Advisories API | GHSA, ecosystem packages, first patched version, vulnerable functions |
+
+All five work without credentials. A `GITHUB_TOKEN` or `GH_TOKEN` is optional
+and only raises GitHub's API rate limit. Connector failures are included in
+`vendor_lookup_errors`; they do not stop the EPSS/KEV/NVD and triage pipeline.
+
 ### Everything runs containerized (nothing but Docker on the host)
 
 ```bash
@@ -284,8 +328,9 @@ docker compose run --rm triage run /work/sbom.spdx.json \
 Files under the repo dir appear at `/work` inside the container; reports
 written to `/out` land in `./out` on the host. `start` keeps stdin attached
 so the wizard works, auto-skips the browser step in a container, and prints
-the report path under `./out` instead. `ANTHROPIC_API_KEY` / `NVD_API_KEY`
-are read from your shell environment (optional — `rules` needs neither).
+the report path under `./out` instead. `ANTHROPIC_API_KEY`, `NVD_API_KEY`, and
+`GITHUB_TOKEN` are read from your shell environment. All are optional;
+`GITHUB_TOKEN` only raises the public GHSA API rate limit.
 
 Generate inputs with the scanners you already run:
 
@@ -306,7 +351,11 @@ osv-scanner --format json -r ./repo > osv.json
               "fixed_version": "2.36-9+deb12u3"},
   "reported_by": ["grype", "trivy"],
   "enrichment": {"epss_score": 0.856, "in_cisa_kev": true,
-                 "kev_ransomware": true, "nvd_cvss_score": 7.8},
+                 "kev_ransomware": true, "nvd_cvss_score": 7.8,
+                 "vendor_sources_checked": ["debian"],
+                 "vendor_advisories": [{"source": "debian",
+                   "advisory_id": "CVE-2023-4911",
+                   "url": "https://security-tracker.debian.org/tracker/CVE-2023-4911"}]},
   "triage": {"priority": "P1", "action": "patch_now",
              "suggested_deadline_days": 3,
              "rationale": "Actively exploited (KEV, ransomware) with a fix

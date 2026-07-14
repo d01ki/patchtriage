@@ -8,8 +8,8 @@
 #
 # Put your scans / SBOMs anywhere under this directory; they appear at /work
 # inside the container. Reports written to /out land in ./out on the host.
-# The triage/start services read ANTHROPIC_API_KEY and NVD_API_KEY from your
-# shell environment (optional — the default 'rules' backend needs neither).
+# The triage/start services read ANTHROPIC_API_KEY, NVD_API_KEY, and
+# GITHUB_TOKEN/GH_TOKEN from your shell environment (all optional).
 
 services:
   # Web GUI console: register targets, import scans/SBOMs, browse reports.
@@ -23,6 +23,8 @@ services:
     environment:
       - ANTHROPIC_API_KEY
       - NVD_API_KEY
+      - GITHUB_TOKEN
+      - GH_TOKEN
     volumes:
       - cache:/home/patchtriage/.cache
       - config:/home/patchtriage/.config
@@ -53,6 +55,8 @@ services:
     environment:
       - ANTHROPIC_API_KEY
       - NVD_API_KEY
+      - GITHUB_TOKEN
+      - GH_TOKEN
       - PATCHTRIAGE_IN_CONTAINER=1
     volumes:
       - ./:/work
@@ -68,6 +72,8 @@ services:
     environment:
       - ANTHROPIC_API_KEY
       - NVD_API_KEY
+      - GITHUB_TOKEN
+      - GH_TOKEN
       - PATCHTRIAGE_IN_CONTAINER=1
     volumes:
       - ./:/work

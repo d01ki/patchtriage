@@ -84,6 +84,7 @@ INDEX_HTML = r"""<!doctype html>
   .microtitle{font:750 10px "SFMono-Regular",Consolas,monospace;text-transform:uppercase;letter-spacing:.12em;color:#768093;margin-bottom:12px}
   .barrow{display:grid;grid-template-columns:92px 1fr 40px;gap:9px;align-items:center;margin:9px 0;font-size:11px}.track{height:8px;background:#e7eaf0;border-radius:2px;overflow:hidden}.fill{height:100%;background:#a7afbd}.fill.epss{background:#6f7f99}.fill.pt{background:#5368e8}.barvalue{font:700 11px "SFMono-Regular",Consolas,monospace;text-align:right}
   .comparefoot{font-size:11.5px;color:#727c8d;margin-top:13px}.factorflow{display:grid;grid-template-columns:1fr 15px 1fr 15px 1fr;gap:5px;align-items:stretch}.factor{border:1px solid #dfe3eb;background:#f8f9fb;border-radius:5px;padding:10px}.factor span{font:9px "SFMono-Regular",Consolas,monospace;text-transform:uppercase;color:#7e8796}.factor b{display:block;font-size:12px;margin-top:4px}.factorarrow{display:flex;align-items:center;justify-content:center;color:#a1a9b6}.riskline{margin-top:10px;background:#171d29;color:white;padding:11px 13px;border-radius:5px;display:flex;justify-content:space-between;align-items:center}.riskline span{color:#9aa4b5;font-size:10px;text-transform:uppercase;letter-spacing:.08em}.riskline b{color:#8fa3ff;font:800 18px "SFMono-Regular",Consolas,monospace}
+  .advisoryline{margin-top:9px;display:flex;gap:6px;flex-wrap:wrap}.advisoryline a,.advisoryline span{font:700 10px "SFMono-Regular",Consolas,monospace;text-decoration:none;border:1px solid #ccd3e1;background:#f7f8fb;color:#4053ba;padding:4px 7px;border-radius:4px}.advisoryline a:hover{text-decoration:underline}
   .running{padding:26px;border-left:4px solid #5368e8}.running strong{font-size:18px}.scanline{height:3px;background:#e1e5ed;margin-top:16px;overflow:hidden}.scanline:after{content:"";display:block;width:32%;height:100%;background:#5368e8;animation:scan 1s infinite ease-in-out}@keyframes scan{from{transform:translateX(-100%)}to{transform:translateX(410%)}}
   .toast{position:fixed;right:22px;bottom:22px;background:#151a25;color:#fff;border:1px solid #343d50;padding:11px 15px;border-radius:6px;box-shadow:0 12px 40px rgba(0,0,0,.28);transform:translateY(90px);opacity:0;transition:.2s;z-index:30;max-width:420px}.toast.show{transform:none;opacity:1}.toast.error{border-color:#a63d36}
   .filehidden{display:none}
@@ -112,7 +113,7 @@ INDEX_HTML = r"""<!doctype html>
     <div class="flow">
       <div class="node"><span class="nodecode">01 / FIND</span><strong>Scanner evidence</strong><small>CVE · package · fixed version</small></div>
       <div class="arrow">→</div>
-      <div class="node"><span class="nodecode">02 / PROVE</span><strong>Threat evidence</strong><small>CISA KEV · FIRST EPSS · NVD</small></div>
+      <div class="node"><span class="nodecode">02 / PROVE</span><strong>Threat evidence</strong><small>KEV · EPSS · MSRC · RHSA · USN · Debian · GHSA</small></div>
       <div class="arrow">→</div>
       <div class="node"><span class="nodecode">03 / CONTEXT</span><strong>Runtime relevance</strong><small>Exposure · reachability · telemetry</small></div>
       <div class="decision"><div><b>Upgrade libc6 on web-frontend</b><br><span>known exploited · ransomware use · fix available</span></div><div class="p1">P1</div></div>
@@ -259,13 +260,17 @@ function explainBlock(summary){
   const f=x.factors;const likelihood=x.kev?"KEV confirmed":(x.epss==null?"EPSS n/a":`EPSS ${(x.epss*100).toFixed(1)}%`);
   const context=[f.internet_exposed?"exposed":"internal",f.reachable?"reachable":"reachability unknown",f.runtime_observed?"runtime seen":"runtime unknown"].join(" · ");
   const risk=(Number(f.likelihood)*Number(f.impact)*Number(f.asset_weight)).toFixed(3);
+  const advisories=(x.advisories||[]).map(a=>a.url
+    ?`<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.source.toUpperCase())} · ${esc(a.advisory_id)} ↗</a>`
+    :`<span>${esc(a.source.toUpperCase())} · ${esc(a.advisory_id)}</span>`).join("");
   return `<div class="microtitle">Why ${esc(x.vuln_id)} leads</div>
     <div class="factorflow">
       <div class="factor"><span>Likelihood</span><b>${esc(likelihood)}</b></div><div class="factorarrow">×</div>
       <div class="factor"><span>Impact</span><b>CVSS ${esc(x.cvss==null?"n/a":x.cvss)}</b></div><div class="factorarrow">×</div>
       <div class="factor"><span>Asset</span><b>${esc(context)}</b></div>
     </div>
-    <div class="riskline"><span>${esc(x.package)} · deterministic risk contribution</span><b>${risk}</b></div>`;
+    <div class="riskline"><span>${esc(x.package)} · deterministic risk contribution</span><b>${risk}</b></div>
+    ${advisories?`<div class="advisoryline">${advisories}</div>`:""}`;
 }
 function renderResult(summary){
   const name=summary.url?`<a href="${esc(summary.url)}" target="_blank" rel="noopener">${esc(summary.name)} ↗</a>`:esc(summary.name);
@@ -279,6 +284,9 @@ function renderResult(summary){
       <span class="metric alert">P1 ${summary.counts.P1}</span><span class="metric">P2 ${summary.counts.P2}</span>
       <span class="metric">${summary.total} findings</span><span class="metric">${summary.actions} package actions</span>
       <span class="metric alert">${summary.kev} KEV</span><span class="metric audit">audit ${summary.audit_verified}/${summary.total}</span>
+      <span class="metric">${summary.vendor_advisories||0} vendor advisories</span>
+      ${(summary.vendor_sources||[]).map(s=>`<span class="metric">${esc(s.toUpperCase())}</span>`).join("")}
+      ${(summary.vendor_errors||[]).length?`<span class="metric alert" title="${esc(summary.vendor_errors.join(" | "))}">${summary.vendor_errors.length} connector warnings</span>`:""}
       <span class="metric">risk cut ${summary.risk_reduced}</span>
     </div>
     <div class="resultbody"><div class="compare">${compareBlock(summary)}</div><div class="explain">${explainBlock(summary)}</div></div>

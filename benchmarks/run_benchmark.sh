@@ -127,6 +127,7 @@ for image in "${TARGETS[@]}"; do
       --asset-id "${image}" --exposed --criticality high \
       --triage rules \
       --no-nvd \
+      --no-vendor-advisories \
       -o "out/${safe}__report.json" \
       --html "out/${safe}__report.html"; then
     ok=$((ok + 1))

@@ -2,6 +2,16 @@
 
 Targets: pinned public container images. Budget k = 50 findings per system - what one team can realistically remediate in a week (one package upgrade usually closes many findings). Ground truth: CISA KEV membership and FIRST EPSS.
 
+## User outcomes
+
+| Outcome | Result |
+|---|---:|
+| First-pass review queue | **26,356 -> 550 findings (97.9% smaller)** |
+| Known-exploited coverage | **84/87 (97%)** |
+| Coverage gain over CVSS sort | **+96 percentage points** |
+| Known-exploited lift over CVSS sort | **84x** |
+| Exploitation-probability mass | **2.6x more** |
+
 | Image | Findings | Budget k | KEV@k CVSS-order | KEV@k PatchTriage | EPSS@k CVSS-order | EPSS@k PatchTriage |
 |---|---|---|---|---|---|---|
 | ghost:3.42 | 511 | 50 | 0/0 | **0/0** | 3.399 | **12.576** |
@@ -15,10 +25,11 @@ Targets: pinned public container images. Budget k = 50 findings per system - wha
 | sonarqube:8.9-community | 120 | 50 | 0/0 | **0/0** | 4.75 | **7.291** |
 | sonatype/nexus3:3.30.0 | 1936 | 50 | 0/9 | **9/9** | 10.591 | **35.38** |
 | wordpress:5.5 | 2137 | 50 | 0/16 | **16/16** | 19.406 | **38.529** |
-| **Total** | | | **1/87** | **84/87** | **102.60** | **264.80** |
+| **Total** | **26,356** | **550** | **1/87** | **84/87** | **102.60** | **264.80** |
 
 ## What this means
 
+* The first-pass queue fell from **26,356 raw findings to 550 prioritized reviews (97.9% smaller)** while surfacing 84 of the 87 known-exploited findings.
 * **87 findings across these systems are on the CISA Known-Exploited-Vulnerabilities list** - attackers are using them in the wild right now. Those are the ones you cannot afford to leave outside the patch budget.
 * Sorting by CVSS (the industry default) put **1 of 87** of them inside the weekly budget - it **missed 99%** of the actively exploited vulnerabilities.
 * PatchTriage caught **84/87 (97%)** with the exact same budget - and **264.8 vs 102.6** EPSS mass (2.6x more).

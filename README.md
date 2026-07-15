@@ -402,10 +402,20 @@ so every decision is auditable against the signals it was made from.
 
 ## Benchmark: PatchTriage catches 97% of what's being exploited; CVSS-sorting catches 1%
 
+The result for an operator is a much smaller first-pass queue without losing
+the vulnerabilities attackers are already using:
+
+| User outcome | Reproducible result |
+|---|---:|
+| **First-pass review queue** | **26,356 → 550 findings (97.9% smaller)** |
+| **Known-exploited coverage** | **84 / 87 CISA KEV findings (97%)** |
+| **Lift over sorting by CVSS** | **84× more KEV surfaced (84 vs 1)** |
+| **Exploitation-probability captured** | **2.6× more EPSS mass** |
+
 > **PatchTriage put 84 of 87 actively-exploited vulnerabilities into the same
-> weekly patch queue that the industry-standard "sort by CVSS" approach filled
-> with only 1.** Higher is better; the `1 / 87` column is the *baseline we beat*,
-> not our result.
+> weekly review budget that the industry-standard "sort by CVSS" approach
+> filled with only 1.** The queue is 50 findings per system across 11 systems;
+> the complete 26,356-finding benchmark and ground truth are reproducible.
 
 The setup: a security team can't patch everything at once. Say you can fix
 **50 findings this week** (a "budget" — one package upgrade usually closes
@@ -428,7 +438,7 @@ frameworks.
 | WordPress 5.5 | 2,137 | 0/16 | **16/16** |
 | Metabase 0.40 | 349 | 1/2 | **2/2** |
 | + Gitea, Grafana, SonarQube, Mattermost, Ghost | — | 0/0 | 0/0 |
-| **Total (11 systems, ~26k findings)** | | **1 / 87 (1%)** | **84 / 87 (97%)** |
+| **Total (11 systems, 26,356 findings)** | | **1 / 87 (1%)** | **84 / 87 (97%)** |
 
 So of the 87 vulnerabilities CISA confirms are being exploited in the wild,
 **PatchTriage's queue contained 84; the CVSS-sorted queue contained 1.**

@@ -14,6 +14,12 @@ from ..evalcmp import evaluate
 from ..ingest.parsers import load_file
 from ..models import Asset
 from ..plan import build_plan, finding_risk, risk_factors
+from ..presentation import (
+    evaluation_outcome,
+    priority_basis,
+    priority_definition,
+    priority_evidence,
+)
 from ..report.html import render_html
 from ..triage.audit import audit_all
 from ..triage.engine import get_backend, run_triage
@@ -77,13 +83,28 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
     top = actions[0] if actions else None
     top_candidates = [
         f for f in findings if top and f.key in top.finding_keys]
-    top_finding = max(top_candidates, key=finding_risk) if top_candidates else None
+    priority_candidates = [
+        f for f in top_candidates
+        if (f.triage or {}).get("priority", "P4") == top.top_priority
+    ] if top else []
+    top_finding_pool = priority_candidates or top_candidates
+    top_finding = (
+        max(top_finding_pool, key=finding_risk) if top_finding_pool else None
+    )
     explanation = None
     if top_finding:
         e = top_finding.enrichment
+        priority = (top_finding.triage or {}).get("priority", "P4")
+        priority_info = priority_definition(priority)
         explanation = {
             "vuln_id": top_finding.vuln_id,
             "package": top_finding.package.name,
+            "priority": priority,
+            "priority_label": priority_info["label"],
+            "priority_description": priority_info["description"],
+            "basis": priority_basis(top_finding),
+            "checks": priority_evidence(top_finding),
+            "rationale": (top_finding.triage or {}).get("rationale", ""),
             "cvss": e.nvd_cvss_score or top_finding.cvss_score,
             "epss": e.epss_score,
             "kev": e.in_cisa_kev,
@@ -111,6 +132,7 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
                 "epss": row.epss_epss,
                 "patchtriage": row.epss_patchtriage,
             },
+            "outcome": evaluation_outcome(row, len(findings)),
         }
 
     advisory_keys = {
@@ -145,6 +167,10 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         "risk_reduced": round(sum(a.risk_reduced for a in actions), 3),
         "top_action": (top.summary if top else ""),
         "top_priority": (top.top_priority if top else ""),
+        "top_priority_label": (
+            priority_definition(top.top_priority)["label"] if top else ""
+        ),
+        "top_deadline_days": (top.deadline_days if top else None),
         "explanation": explanation,
         "comparison": comparison,
         "demo": bool(target.get("demo")),

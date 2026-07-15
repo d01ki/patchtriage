@@ -84,6 +84,12 @@ def test_rules_backend_uses_positive_runtime_evidence():
 from patchtriage.context import apply_context, load_inventory
 from patchtriage.evalcmp import evaluate
 from patchtriage.plan import build_plan, finding_risk, risk_factors
+from patchtriage.presentation import (
+    evaluation_outcome,
+    priority_basis,
+    priority_definition,
+    priority_evidence,
+)
 from patchtriage.report.html import render_html
 
 
@@ -164,6 +170,27 @@ def test_eval_patchtriage_beats_cvss_at_k1():
     assert rows[0].epss_patchtriage > rows[0].epss_baseline
 
 
+def test_priority_is_explained_in_plain_language_and_evidence():
+    findings = _triaged_findings()
+    libc = next(f for f in findings if "libc" in f.package.name)
+    assert priority_definition("P1")["label"] == "Patch Immediately"
+    assert priority_basis(libc).startswith("P1 because CISA KEV confirms")
+    checks = {check["label"]: check for check in priority_evidence(libc)}
+    assert checks["Known exploitation"]["status"] == "confirmed"
+    assert "ransomware" in checks["Known exploitation"]["value"]
+    assert checks["Fix readiness"]["status"] == "confirmed"
+
+
+def test_evaluation_is_presented_as_user_outcomes():
+    findings = _triaged_findings()
+    row = evaluate(findings, budgets=[1])[0]
+    outcome = evaluation_outcome(row, len(findings))
+    assert outcome["review_reduction_pct"] == 66.7
+    assert outcome["kev_coverage_pct"] == 100.0
+    assert outcome["kev_gain_points"] == 100.0
+    assert outcome["additional_kev_vs_cvss"] == 1
+
+
 def test_html_report_renders():
     findings = _triaged_findings()
     actions = build_plan(findings)
@@ -171,7 +198,11 @@ def test_html_report_renders():
     assert "<!doctype html>" in html
     assert "CVE-2023-4911" in html
     assert "Remediation plan" in html
-    assert "Why this action leads" in html
+    assert "Why P1" in html
+    assert "P1 — Patch Immediately" in html
+    assert 'class="evidence"' in html
+    assert "Known exploitation" in html
+    assert "smaller first-pass queue" in html
     assert "CVSS or EPSS alone" in html
     assert "cdn" not in html.lower()              # must stay self-contained
 

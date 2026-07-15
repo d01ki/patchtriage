@@ -65,6 +65,16 @@ def main(out_dir: str) -> None:
     # tight-budget totals (same reports, stricter budget)
     _, kb_t, kp_t, kt_t, _, _ = _totals(systems, BUDGET_TIGHT)
 
+    total_findings = sum(n for _, n, _ in per)
+    total_reviewed = sum(r.k for _, _, r in per)
+    review_reduction = (
+        100 * (1 - total_reviewed / total_findings) if total_findings else 0.0
+    )
+    caught_pct = round(100 * kp / kt) if kt else 0
+    cvss_pct = round(100 * kb / kt) if kt else 0
+    kev_lift = (kp / kb) if kb else None
+    epss_ratio = (ep / eb) if eb else 0.0
+
     lines = [
         "# PatchTriage benchmark results",
         "",
@@ -72,6 +82,20 @@ def main(out_dir: str) -> None:
         "findings per system - what one team can realistically remediate in a "
         "week (one package upgrade usually closes many findings). Ground "
         "truth: CISA KEV membership and FIRST EPSS.",
+        "",
+        "## User outcomes",
+        "",
+        "| Outcome | Result |",
+        "|---|---:|",
+        f"| First-pass review queue | **{total_findings:,} -> "
+        f"{total_reviewed:,} findings ({review_reduction:.1f}% smaller)** |",
+        f"| Known-exploited coverage | **{kp}/{kt} ({caught_pct}%)** |",
+        f"| Coverage gain over CVSS sort | **+{caught_pct - cvss_pct} "
+        "percentage points** |",
+        f"| Known-exploited lift over CVSS sort | **{kev_lift:.0f}x** |"
+        if kev_lift is not None else
+        "| Known-exploited lift over CVSS sort | **CVSS surfaced none** |",
+        f"| Exploitation-probability mass | **{epss_ratio:.1f}x more** |",
         "",
         "| Image | Findings | Budget k | KEV@k CVSS-order | KEV@k PatchTriage "
         "| EPSS@k CVSS-order | EPSS@k PatchTriage |",
@@ -84,18 +108,19 @@ def main(out_dir: str) -> None:
             f"| **{r.kev_patchtriage}/{r.kev_total}** "
             f"| {r.epss_baseline} | **{r.epss_patchtriage}** |")
     lines += [
-        f"| **Total** | | | **{kb}/{kt}** | **{kp}/{kt}** "
+        f"| **Total** | **{total_findings:,}** | **{total_reviewed:,}** | **{kb}/{kt}** | **{kp}/{kt}** "
         f"| **{eb:.2f}** | **{ep:.2f}** |",
     ]
 
-    caught_pct = round(100 * kp / kt) if kt else 0
     missed_pct = round(100 * (1 - kb / kt)) if kt else 0
     caught_pct_t = round(100 * kp_t / kt_t) if kt_t else 0
-    epss_ratio = (ep / eb) if eb else 0.0
     verdict = [
         "",
         "## What this means",
         "",
+        f"* The first-pass queue fell from **{total_findings:,} raw findings "
+        f"to {total_reviewed:,} prioritized reviews ({review_reduction:.1f}% "
+        f"smaller)** while surfacing {kp} of the {kt} known-exploited findings.",
         f"* **{kt} findings across these systems are on the CISA "
         f"Known-Exploited-Vulnerabilities list** - attackers are using them "
         f"in the wild right now. Those are the ones you cannot afford to "

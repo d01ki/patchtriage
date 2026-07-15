@@ -4,517 +4,370 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-**AI-assisted vulnerability triage for the frontier-AI era.**
+PatchTriage turns scanner evidence into environment-specific patch deployment
+decisions. It ingests vulnerability scans or SBOMs, deduplicates findings,
+adds exploitation and vendor evidence, and applies the deterministic
+[CERT/CC SSVC Deployer model](https://certcc.github.io/SSVC/howto/deployer_tree/).
 
-Frontier AI models and automated scanners now surface vulnerabilities faster
-than any team can patch them. The bottleneck has moved from *finding*
-vulnerabilities to *deciding what to fix first*. PatchTriage ingests raw
-scanner output, deduplicates findings across tools, enriches them with
-authoritative exploitation signals (EPSS, CISA KEV, NVD) and official vendor
-advisories (Microsoft, Red Hat, Ubuntu, Debian, GitHub), then applies the
-deterministic [CERT/CC SSVC Deployer model](https://certcc.github.io/SSVC/howto/deployer_tree/)
-to produce an environment-specific, defensible patch plan.
+The output is a defensible action queue with one of four plain-language SSVC
+outcomes: **Immediate**, **Out-of-Cycle**, **Scheduled**, or **Defer**.
 
-**Design principle: the LLM never decides priority or invents numbers.** All
-signals come from authoritative sources or declared asset context. The SSVC
-decision tree fixes the priority; optional AI only improves explanations,
-remediation steps, and uncertainty notes.
+> AI never chooses the SSVC outcome and never invents a score. Optional AI
+> backends can improve explanations and remediation guidance only. Every
+> result is checked again by the deterministic engine.
 
 ![PatchTriage demo](docs/demo.gif)
 
-*(Regenerate this GIF with `vhs docs/demo.tape` — see [charmbracelet/vhs](https://github.com/charmbracelet/vhs).)*
+## Quick start with Docker
 
-## Fastest path: just Docker (nothing else to install)
-
-No Python, no venv, no PEP 668 headaches — if you have Docker, you have
-everything:
+Docker is the shortest path to the GUI:
 
 ```bash
-git clone https://github.com/d01ki/patchtriage && cd patchtriage
-./run.sh                         # builds, starts the console, opens your browser
-# equivalently: docker compose up gui   ->   http://localhost:8765
+git clone https://github.com/d01ki/patchtriage
+cd patchtriage
+./run.sh
 ```
 
-`./run.sh` builds the image, starts the console, waits until it is ready, and
-opens `http://localhost:8765`. Stop it with `./run.sh --stop`. (Upgraded from
-an older version and hitting permission errors? Reset the volumes once with
-`docker compose down -v`.)
-
-That launches the **web console**: register your systems as targets, import a
-scan or SBOM per target from the browser, and run triage — no local scanner
-or API key required (SBOMs are resolved online via OSV.dev). `Ctrl-C` stops
-it; `docker compose up -d gui` runs it in the background. Registered targets
-and reports persist across restarts.
-
-Just want the offline demo?
+Open [http://localhost:8765](http://localhost:8765). The equivalent command is:
 
 ```bash
-docker compose run --rm demo     # report appears in ./out/demo_report.html
+docker compose up gui
 ```
 
-### Or install locally (Python 3.10+)
+Stop the console with `./run.sh --stop` or `docker compose down`. Targets,
+attached evidence, reports, and caches persist in Docker volumes.
+
+To run the bundled air-gapped demonstration instead:
 
 ```bash
-pip install -e .            # in a venv; on Debian/Ubuntu: python3 -m venv .venv first
-patchtriage demo           # offline demo -> demo_report.html
-patchtriage serve          # the same web console, natively
+docker compose run --rm demo
+# HTML: ./out/demo_report.html
+# JSON: ./out/demo_report.json
 ```
 
-On Windows PowerShell, from this repository:
+## Local installation
 
-```powershell
-.\.venv\Scripts\patchtriage.exe serve
-# Your browser opens automatically at http://127.0.0.1:8765
-```
-
-If the editable console script has not been installed yet, use
-`.\.venv\Scripts\python.exe -m patchtriage.cli serve`. Add `--no-browser` when
-you only want the URL printed. The **Run the offline demo** button needs no
-API key or network access.
-
-The demo ships with real Trivy/Grype output samples and offline snapshots of
-EPSS / CISA KEV / NVD data, so the entire pipeline — ingest, dedup, context,
-enrichment, triage, planning, HTML dashboard, and the built-in evaluation —
-runs air-gapped.
-
-## The usage flow
-
-```
- 1. scan (tools you already run)        2. describe your environment once
-    trivy image --format json ...          assets.yaml  (glob -> SSVC exposure,
-    grype <image> -o json ...                            mission/safety impact)
-    osv-scanner --format json ...
-                    \                          /
-                     v                        v
- 3. patchtriage run *.json --assets assets.yaml --html report.html -o report.json
-                     |
-                     v
- 4. work the plan top-down: each row = one concrete change (e.g. "Upgrade
-    libc6 to 2.36-9+deb12u3 on web-frontend"), ranked by SSVC action timing
- 5. (optional) --triage claude for analyst-grade explanations per finding
- 6. re-scan after patching; re-run; the report shows what burned down
-```
-
-## Proving practicality: the built-in evaluation
-
-Every run ends with an outcome check. For the same findings and a fixed work
-budget k, four orderings are compared: CVSS, EPSS, KEV-first, and SSVC.
-CISA KEV coverage is independent observed-exploitation evidence. “SSVC
-urgent” coverage shows whether the queue preserves this inventory's Immediate
-and Out-of-Cycle decisions; it is a context-consistency measure, not external
-ground truth. From the demo:
-
-| Budget | KEV · CVSS | KEV · EPSS | KEV · KEV-first | KEV · SSVC | Urgent · CVSS | Urgent · SSVC |
-|---|---:|---:|---:|---:|---:|---:|
-| top 1 | 0/1 | 1/1 | 1/1 | 1/1 | 0/1 | 1/1 |
-
-With a budget of one fix, CVSS-sorting spends it on the flashy 10.0 while the
-vulnerability being exploited in ransomware campaigns waits. PatchTriage
-spends it on the one that is actually being used against you. Run the same
-evaluation on your own scans — it is printed on every `run`.
-
-## Why CVSS alone is not enough
-
-Run the bundled demo and you'll see it immediately:
-
-| SSVC outcome | CVE | Package | CVSS | EPSS | KEV | Decision |
-|---|-----|---------|------|------|-----|----------|
-| **Immediate** | CVE-2023-4911 | libc6 | 7.8 | 0.856 | **YES (ransomware)** | patch_immediately |
-| Scheduled | CVE-2024-3094 | xz-utils | **10.0** | 0.372 | — | patch_scheduled |
-| Scheduled | CVE-2021-23337 | lodash | 7.2 | 0.018 | – | patch_scheduled |
-
-Sorting by CVSS would put the 10.0 first. PatchTriage puts the
-actively-exploited 7.8 first — because that is what is actually being used
-against you in the wild.
-
-## Architecture
-
-```
- scanner outputs          PatchTriage pipeline
-┌───────────────┐   ┌──────────────────────────────────────────┐
-│ Trivy JSON    │   │ [1] Ingest    → normalize to one schema  │
-│ Grype JSON    ├──▶│ [2] Dedup     → merge across scanners    │
-│ osv-scanner   │   │               (CVE/GHSA alias graph)     │
-│ (pluggable)   │   │ [3] Enrich    → EPSS · KEV · NVD + vendor│
-└───────────────┘   │               (deterministic, cached)    │
-                    │ [4] Context   → asset criticality/expo.  │
-                    │ [5] AI triage → rules | claude backend   │
-                    │ [6] Report    → table / JSON / tickets   │
-                    └──────────────────────────────────────────┘
-```
-
-* **Layer 1 — Ingest** (`ingest/parsers.py`): parsers for Trivy, Grype and
-  osv-scanner with automatic format sniffing. Every record is mapped to a
-  common `RawFinding` schema. Adding a scanner is one function.
-* **Layer 2 — Dedup** (`dedup.py`): builds a cross-scanner alias graph so a
-  Trivy `CVE-2021-23337` and a Grype `GHSA-35jh-…` merge into one finding.
-  Merge policy is conservative: max severity/CVSS wins, sources are unioned,
-  nothing is silently dropped.
-* **Layer 3 — Enrich** (`enrich/clients.py`, `enrich/vendors.py`): batch EPSS
-  lookups, the full CISA KEV catalog (incl. ransomware-campaign flags and due
-  dates), NVD CVSS/CWE/exploit-reference data, and normalized records from
-  Microsoft MSRC, Red Hat RHSA, Ubuntu USN, Debian Security Tracker, and the
-  GitHub Advisory Database. Everything is cached in
-  `~/.cache/patchtriage` — re-runs are free and the tool works offline after
-  the first sync. Individual vendor outages are recorded per finding and do
-  not abort triage. No API keys are required (NVD/GitHub keys raise rate
-  limits). Vendor presence is evidence, not an automatic risk-score boost.
-* **Layer 4 — Context** (`context.py`): a small `assets.yaml` inventory
-  records SSVC System Exposure, Automatable, Mission Impact, and Safety
-  Impact, plus reachability/runtime evidence. Missing SSVC context uses the
-  standard's conservative default and is visibly marked for confirmation;
-  it never silently lowers priority.
-* **Layer 5 — Triage** (`triage/engine.py`): pluggable backends behind one
-  interface.
-  * `rules` — backwards-compatible CLI name for the deterministic SSVC
-    Deployer backend. Runs anywhere, no keys, ideal for CI.
-  * `claude` — sends each enriched finding to the Anthropic API
-    (default `claude-opus-4-8`), with structured output enforced through
-    strict tool use. The model receives the already-final SSVC result and
-    returns explanation/remediation fields only. Calls run in
-    parallel (`--jobs`), and any finding whose API call fails degrades
-    gracefully to the deterministic SSVC baseline (tagged `rules_fallback` in the report)
-    — a network blip never aborts a 2,000-finding run.
-  * `cascade` — a two-tier agent pipeline. A fast screening model
-    (default `claude-haiku-4-5`) triages every finding; a finding is
-    escalated to the frontier model (default `claude-opus-4-8`) only when it
-    has an urgent SSVC outcome, requires context confirmation, or when its
-    screening explanation **fails the machine
-    audit**. Frontier reasoning exactly where mistakes are expensive,
-    screening-tier cost everywhere else — and every routing decision is
-    recorded (`escalated`, `escalation_reasons`) so the cascade itself is
-    auditable.
-
-## Install
+Python 3.10 or newer is required.
 
 ```bash
-pip install -e .          # core pipeline
-pip install -e ".[ai]"    # + Anthropic backend
-pip install -e ".[dev]"   # + pytest
+python -m venv .venv
+# Linux/macOS
+source .venv/bin/activate
+# Windows PowerShell
+# .\.venv\Scripts\Activate.ps1
+
+python -m pip install -e .
+patchtriage serve
 ```
 
-## Web console (GUI)
-
-Prefer clicking to typing? Launch the local web console:
+The GUI opens at [http://127.0.0.1:8765](http://127.0.0.1:8765). If the
+console script is not on `PATH`, use:
 
 ```bash
-patchtriage serve            # opens http://127.0.0.1:8765 in your browser
+python -m patchtriage.cli serve
 ```
 
-Register each internal system as a **target** (name, a **link URL** to its
-dashboard/repo/runbook, SSVC exposure, mission/safety impact, automatable
-spread, reachability, and runtime observations), attach a scan or an SBOM per target, and hit
-**Run all**. You get a per-target decision board with the leading package
-action, CVSS-vs-EPSS-vs-KEV-vs-SSVC comparison, deterministic SSVC decision
-path, confidence/confirmation status, priority counts, KEV count, and audit status. Every target name links
-back to the real system, and every result opens its self-contained HTML report.
-
-For a talk or review, click **Run the offline demo**: bundled Trivy evidence
-and EPSS/KEV/NVD snapshots produce the complete decision flow without network,
-API keys, or prior setup. The demo snapshot is applied in memory and never
-touches the real enrichment cache.
-
-Built for estates with many systems; the registry persists under
-`~/.config/patchtriage`. Standard-library only (no web framework), binds to
-localhost by default, and applies the same SSVC decision model as the CLI.
+Useful entry points:
 
 ```bash
-docker compose up gui        # same console in a container -> http://localhost:8765
+patchtriage serve       # GUI
+patchtriage demo        # reproducible offline demo
+patchtriage start       # guided CLI workflow
+patchtriage run --help  # scriptable pipeline
+patchtriage verify      # offline conformance and repeatability proof
 ```
 
-The container port binds to `127.0.0.1` by default. Set
-`PATCHTRIAGE_BIND=0.0.0.0` only when you intentionally place the console
-behind an authenticated network boundary.
+## GUI workflow
 
-## Interactive setup & guided run
+1. Add a target that represents one deployed system or service.
+2. Record the target's CERT/CC SSVC context.
+3. Attach vulnerability evidence.
+4. Run the deterministic assessment.
+5. Review the SSVC decision path, supporting signals, confirmation warnings,
+   and package-level remediation action.
 
-No flags to memorize — two commands walk you through everything:
+The **Attach scan / SBOM** button accepts:
+
+- Trivy JSON;
+- Grype JSON;
+- osv-scanner JSON;
+- CycloneDX JSON SBOM;
+- SPDX JSON SBOM.
+
+Scanner JSON already contains vulnerabilities. An SBOM contains components,
+not vulnerability findings, so PatchTriage resolves its packages through
+[OSV.dev](https://osv.dev) before assessment. That SBOM path therefore needs
+network access; the bundled demo does not.
+
+## What target context means
+
+The GUI asks only for organizational inputs that belong to the official SSVC
+Deployer method. Describe the deployed target and the credible consequence of
+its failure, not the vulnerability itself.
+
+| GUI field | What to assess | CERT/CC values | Default when unknown |
+|---|---|---|---|
+| System Exposure | How attackers can reach this deployed system | Small, Controlled, Open | Open |
+| Mission Impact | Effect on Mission Essential Functions (MEFs) | Degraded, MEF Support Crippled, MEF Failure, Mission Failure | MEF Support Crippled |
+| Safety Impact | Highest credible harm to people, systems, environment, finances, or well-being | Negligible, Marginal, Critical, Catastrophic | Marginal |
+| Context evidence sources | Where the answers came from, such as a CMDB, service owner, BCP, or safety analysis | Free text provenance | None |
+
+The SSVC engine evaluates the remaining decision points as follows:
+
+- **Exploitation** is derived from authoritative threat evidence. A CISA KEV
+  listing is Active; public exploit evidence can establish Public PoC.
+- **Automatable** is vulnerability-specific. PatchTriage derives it per
+  finding from CVSS v4 `AU`, or from the CVSS v3 attack vector, privileges,
+  user interaction, and complexity when v4 is unavailable. It is intentionally
+  not a target-wide GUI field.
+- **Human Impact** is derived by the published CERT/CC table from the target's
+  Mission Impact and Safety Impact.
+
+`Unknown` is a PatchTriage capture state, not an additional SSVC value. The
+official conservative default is applied and the inferred field remains
+visibly marked for confirmation.
+
+Reachability and runtime-observation checkboxes are useful supporting evidence,
+but they are not official SSVC Deployer decision points and do not replace the
+published decision path.
+
+Official definitions:
+
+- [SSVC Deployer decision tree](https://certcc.github.io/SSVC/howto/deployer_tree/)
+- [System Exposure](https://certcc.github.io/SSVC/reference/decision_points/system_exposure/)
+- [Automatable](https://certcc.github.io/SSVC/reference/decision_points/automatable/)
+- [Mission Impact](https://certcc.github.io/SSVC/reference/decision_points/mission_impact/)
+- [Safety Impact](https://certcc.github.io/SSVC/reference/decision_points/safety_impact/)
+- [Human Impact](https://certcc.github.io/SSVC/reference/decision_points/human_impact/)
+
+## Reading the result
+
+SSVC produces a categorical deployment decision, not a numerical risk score.
+
+| Outcome | Plain-language action | PatchTriage operational target |
+|---|---|---:|
+| Immediate | Act now | 3 days |
+| Out-of-Cycle | Use the next available deployment opportunity | 14 days |
+| Scheduled | Include in normal maintenance | 30 days |
+| Defer | Monitor and reassess | 90 days |
+
+The day targets are PatchTriage workflow defaults; they are not additional
+CERT/CC decision values. Organizations should map them to their own policy.
+
+### Why Scheduled has no SSVC score
+
+That is intentional. A Scheduled result is a complete SSVC outcome, not a
+missing calculation. The GUI and HTML report still show:
+
+- the four decision-point values and their evidence sources;
+- confidence and any values that need confirmation;
+- CVSS;
+- EPSS 30-day probability;
+- CISA KEV status;
+- fixed-version availability;
+- vendor advisories and the machine-audit result.
+
+CVSS, EPSS, KEV, and fix availability remain visible as supporting evidence.
+Inside the same outcome, the SSVC decision points are compared first, followed
+by EPSS and CVSS tie-breakers. No values are added together into a score, and
+no tie-breaker can override the categorical outcome.
+
+### What “No vulnerabilities found” means
+
+This state means the attached scan contained zero vulnerability records, or an
+attached SBOM resolved to zero known OSV vulnerabilities. It does **not** mean
+an SSVC Defer decision and does not prove that the target is vulnerability-free.
+Confirm that the scan covered the intended artifact, that the file is current,
+and that SBOM package identifiers and versions are complete before relying on
+the result.
+
+## Bundled demo
+
+The demo uses frozen Trivy, Grype, EPSS, CISA KEV, and NVD evidence, so it
+works without a network or API key. Its three deduplicated findings illustrate
+why severity alone is not the deployment decision:
+
+| SSVC outcome | Vulnerability | Package | CVSS | EPSS | CISA KEV |
+|---|---|---|---:|---:|---|
+| Out-of-Cycle | CVE-2023-4911 | libc6 | 7.8 | 0.856 | Yes |
+| Scheduled | CVE-2024-3094 | xz-utils | 10.0 | 0.372 | No |
+| Scheduled | CVE-2021-23337 | lodash | 7.2 | 0.018 | No |
+
+The known-exploited finding is surfaced before the CVSS 10.0 finding, while
+the exact outcome remains explainable from the SSVC path and target context.
+This small demo proves pipeline behavior, not real-world effectiveness.
+
+## Scriptable usage
 
 ```bash
-patchtriage setup    # asks for your API keys one by one, validates the
-                     # Anthropic key live (no tokens spent), lets you pick a
-                     # default backend, saves to ~/.config/patchtriage/
-patchtriage start    # asks what to triage (scan JSON or SBOM), asset
-                     # context, backend, output paths - then runs the report
-```
+# Scanner output to JSON and self-contained HTML reports
+patchtriage run trivy.json grype.json \
+  --assets assets.yaml \
+  --html report.html \
+  -o report.json
 
-Keys entered in `setup` are stored locally (0600) and exported for every
-later command; environment variables always take precedence, so CI and
-containers are unaffected.
+# SBOM to assessed findings through OSV.dev
+patchtriage run sbom.spdx.json --html report.html
 
-## Have an SBOM, no scanner? (e.g. GitHub's SPDX export)
+# Enter explicit target context without an inventory
+patchtriage run trivy.json \
+  --ssvc-exposure open \
+  --ssvc-mission-impact mef_failure \
+  --ssvc-safety-impact critical
 
-An SBOM lists *components*, not vulnerabilities — so on its own there is
-nothing to triage. PatchTriage bridges that gap online: point it at a
-CycloneDX or SPDX file and it resolves every package against the free
-[OSV.dev](https://osv.dev) database to get the vulnerabilities, then enriches
-and triages them exactly like scanner output. **No Trivy/Grype install
-needed — just network access.** This is the path when you cloned the repo on
-a plain Linux box and your SBOM came from GitHub's dependency graph:
-
-```bash
-# GitHub -> repo -> Insights -> Dependency graph -> Export SBOM (SPDX JSON)
-patchtriage run sbom.spdx.json --criticality high --html report.html
-# CycloneDX works too (syft, cdxgen, cyclonedx-* all emit it):
-patchtriage run bom.cdx.json -o report.json
-```
-
-The format is auto-detected. OSV responses are cached, so re-runs are cheap.
-
-## Usage
-
-```bash
-# Deterministic triage of one or more scanner outputs
-patchtriage run trivy.json grype.json --exposed --criticality high -o report.json
-
-# Prefer explicit SSVC Deployer context for production decisions
-patchtriage run trivy.json --ssvc-exposure open --ssvc-automatable yes \
-  --ssvc-mission-impact mef_failure --ssvc-safety-impact marginal
-
-# Skip NVD for speed (EPSS + KEV only)
+# Skip slower NVD enrichment; retain EPSS and CISA KEV
 patchtriage run trivy.json --no-nvd
 
-# Vendor feeds are selected from package/distro metadata by default
-patchtriage run trivy.json --vendor-sources auto
-
-# Force a cross-vendor lookup, or disable vendor lookups for a benchmark
+# Query every vendor connector, or disable vendor advisories
 patchtriage run trivy.json --vendor-sources all
 patchtriage run trivy.json --no-vendor-advisories
-
-# Frontier-AI triage (key from `patchtriage setup` or ANTHROPIC_API_KEY)
-patchtriage run trivy.json grype.json --triage claude --limit 50
-
-# Cascade: screen everything with Haiku, escalate only what matters to Opus
-patchtriage run trivy.json grype.json --triage cascade
-
-# Include positive reachability/runtime evidence without an inventory file
-patchtriage run trivy.json --reachable --runtime-observed --exposed
-
-# Bulk overnight re-triage at 50% API cost via the Message Batches API
-patchtriage run trivy.json --triage claude --batch
-
-# Tune parallelism / models
-patchtriage run trivy.json --triage cascade --jobs 8 \
-    --model claude-haiku-4-5 --escalation-model claude-opus-4-8
 ```
 
-### Official vendor advisory connectors
+An advanced `--ssvc-automatable yes|no` override exists for cases where an
+analyst has established the value for the vulnerabilities in that run. Do not
+use it as a generic property of the target.
 
-`--vendor-sources auto` (the default) selects feeds from package ecosystem and
-distro metadata. `--vendor-sources all` queries every connector for each CVE,
-which is useful for research but slower. Results and negative lookups are
-cached for 24 hours; the Debian full tracker feed is downloaded at most once
-per cache window.
+Example `assets.yaml`:
 
-| Source | Public endpoint | Normalized evidence |
-|---|---|---|
-| [Microsoft MSRC](https://github.com/microsoft/MSRC-Microsoft-Security-Updates-API) | CVRF API v3 | update document and CVRF link |
-| [Red Hat RHSA](https://docs.redhat.com/en/documentation/red_hat_security_data_api/1.0/html-single/red_hat_security_data_api/red_hat_security_data_api) | Security Data CSAF API | RHSA, severity, released packages |
-| [Ubuntu USN](https://documentation.ubuntu.com/security/security-updates/osv/) | Ubuntu OSV records | USN, affected packages, fixed versions |
-| [Debian](https://www.debian.org/security/index) | Security Tracker JSON | release status and fixed versions |
-| [GitHub GHSA](https://docs.github.com/en/rest/security-advisories/global-advisories) | Global Security Advisories API | GHSA, ecosystem packages, first patched version, vulnerable functions |
-
-All five work without credentials. A `GITHUB_TOKEN` or `GH_TOKEN` is optional
-and only raises GitHub's API rate limit. Connector failures are included in
-`vendor_lookup_errors`; they do not stop the EPSS/KEV/NVD and triage pipeline.
-
-### Everything runs containerized (nothing but Docker on the host)
-
-```bash
-docker compose run --rm demo         # offline demo -> ./out/demo_report.html
-docker compose run --rm start        # interactive guided run (asks questions)
-docker compose run --rm triage run /work/sbom.spdx.json \
-    --criticality high -o /out/report.json --html /out/report.html
+```yaml
+assets:
+  - match: "web-frontend*"
+    system_exposure: open
+    mission_impact: mef_failure
+    safety_impact: critical
+    reachable: true
+    runtime_observed: true
+    context_sources: [CMDB, service-owner, BCP]
+    owner: platform-team
 ```
 
-Files under the repo dir appear at `/work` inside the container; reports
-written to `/out` land in `./out` on the host. `start` keeps stdin attached
-so the wizard works, auto-skips the browser step in a container, and prints
-the report path under `./out` instead. `ANTHROPIC_API_KEY`, `NVD_API_KEY`, and
-`GITHUB_TOKEN` are read from your shell environment. All are optional;
-`GITHUB_TOKEN` only raises the public GHSA API rate limit.
-
-Generate inputs with the scanners you already run:
+Generate inputs with scanners you already use:
 
 ```bash
-trivy image --format json -o trivy.json  myorg/web-frontend:1.4
+trivy image --format json -o trivy.json myorg/web-frontend:1.4
 grype myorg/web-frontend:1.4 -o json > grype.json
 osv-scanner --format json -r ./repo > osv.json
 ```
 
-## Output
+## Evidence connectors
 
-`report.json` contains every finding with full provenance:
+Core enrichment uses EPSS, CISA KEV, and optionally NVD. Vendor connectors are
+selected from package and distribution metadata by default.
 
-```json
-{
-  "vuln_id": "CVE-2023-4911",
-  "package": {"name": "libc6", "version": "2.36-9",
-              "fixed_version": "2.36-9+deb12u3"},
-  "reported_by": ["grype", "trivy"],
-  "enrichment": {"epss_score": 0.856, "in_cisa_kev": true,
-                 "kev_ransomware": true, "nvd_cvss_score": 7.8,
-                 "vendor_sources_checked": ["debian"],
-                 "vendor_advisories": [{"source": "debian",
-                   "advisory_id": "CVE-2023-4911",
-                   "url": "https://security-tracker.debian.org/tracker/CVE-2023-4911"}]},
-  "triage": {"action": "patch_immediately",
-             "suggested_deadline_days": 3,
-             "rationale": "SSVC Active / Open / Yes / High results in Immediate.",
-             "ssvc": {"model": "ssvc:DT_DP:1.0.0",
-                      "decision_label": "Immediate",
-                      "decision_path": "Active → Open → Yes → High → Immediate",
-                      "needs_confirmation": []}}
-}
-```
+| Source | Evidence returned |
+|---|---|
+| Microsoft MSRC | Update document and CVRF/CSAF reference |
+| Red Hat RHSA | Advisory, severity, and released packages |
+| Ubuntu USN | Advisory, affected packages, and fixed versions |
+| Debian Security Tracker | Distribution release status and fixed versions |
+| GitHub GHSA | Advisory, ecosystem packages, patched version, and vulnerable functions |
 
-Ground truth (`enrichment`) and AI output (`triage`) are separated by design,
-so every decision is auditable against the signals it was made from.
+The connectors work without credentials. `GITHUB_TOKEN`/`GH_TOKEN` and
+`NVD_API_KEY` only raise public API rate limits. Connector failures are
+recorded per finding and do not abort the assessment.
 
-## Auditability, planning and reporting
+## Optional AI explanations
 
-* **Audit** (`triage/audit.py`): every decision is machine-verified against a
-  fresh deterministic SSVC assessment. An outcome/action/deadline mismatch,
-  fabricated numbers in AI prose, or a patch action without a supplied fix is
-  flagged. The LLM cannot override the SSVC outcome.
-* **Layer 6 — Plan** (`plan.py`): findings are grouped into concrete actions
-  ("Upgrade libc6 to X on host Y") and ordered by SSVC outcome. No proprietary
-  arithmetic score competes with or modifies the official decision path.
-* **Layer 7 — Report** (`report/html.py`): one self-contained HTML file —
-  priority spine, explainability graph, remediation ledger with risk-reduction
-  bars, evaluation table, full findings with rationales. No CDN, opens offline,
-  safe to attach to a ticket or email.
-* **Evaluation** (`evalcmp.py`): the CVSS-vs-EPSS-vs-KEV-first-vs-SSVC
-  comparison described above, computed on every run.
-
-## What PatchTriage does NOT do
-
-* It does not apply patches. It decides *what to patch first* and hands the
-  plan to your existing mechanisms (apt/WSUS/Ansible/CI).
-* It is not a full vulnerability scanner. As a convenience path it can resolve
-  CycloneDX/SPDX components through OSV.dev, while production scanner output
-  from Trivy/Grype/osv-scanner remains the preferred input. PatchTriage is the
-  decision layer on top.
-* It does not let the LLM produce scores. Ever.
-
-## Reviewer verification (current implementation)
-
-Run the current proof completely offline, with no API keys:
+Install the additional dependency and provide an Anthropic API key:
 
 ```bash
+python -m pip install -e ".[ai]"
+export ANTHROPIC_API_KEY=...
+
+patchtriage run trivy.json --triage claude --html report.html
+patchtriage run trivy.json --triage cascade --html report.html
+```
+
+- `rules`: deterministic SSVC only; default and suitable for CI.
+- `claude`: deterministic SSVC plus an AI-written explanation.
+- `cascade`: screens every result and escalates only urgent, uncertain, or
+  audit-failing explanations to the larger configured model.
+
+If an API call fails, the finding falls back to deterministic output. The
+audit rejects outcome, action, deadline, or signal claims that conflict with
+the evidence.
+
+## Pipeline
+
+```text
+scan JSON / SBOM
+        |
+        v
+ingest -> deduplicate -> apply target context -> enrich threat/vendor evidence
+        -> SSVC Deployer decision -> machine audit -> remediation plan
+        -> JSON + self-contained HTML report
+```
+
+Aliases such as CVE and GHSA are merged conservatively. Evidence provenance is
+retained in the JSON result. The HTML report has no CDN dependency and can be
+opened offline or attached to a review ticket.
+
+## Reproducibility and reviewer verification
+
+Run the current engine's offline proof from a clean checkout:
+
+```bash
+python -m pip install -e .
 patchtriage verify --repeats 100 --output verification_report.json
 ```
 
-This verifies all 72 official SSVC Deployer paths, all 16 official Human
-Impact combinations, GUI target-context mapping, same-CVE target sensitivity,
-unknown-context warnings, repeated deterministic agreement, a frozen
-end-to-end pipeline, and decision-tamper detection. The JSON report includes
-SHA-256 input and decision fingerprints so a reviewer can rerun the exact
-evidence. See [docs/VALIDATION.md](docs/VALIDATION.md) for the claim boundary
-and jury protocol.
+The verification command checks:
 
-## Historical pre-SSVC benchmark (not a current SSVC performance claim)
+- all 72 published SSVC Deployer decision-table paths;
+- all 16 published Human Impact combinations;
+- GUI target context reaching the production decision engine unchanged;
+- conservative handling of unknown context;
+- repeated deterministic decision hashes;
+- the frozen end-to-end ingest-to-audit pipeline;
+- detection of altered outcomes, actions, deadlines, and decision paths.
 
-> The results below were produced on 2026-07-11 by the former signal-weighted
-> deterministic ordering. They remain for reproducibility, but must not be
-> presented as results of the current SSVC implementation. Re-run the benchmark
-> to generate current CVSS/EPSS/KEV-first/SSVC results for a declared context
-> profile.
+The output includes SHA-256 fingerprints for the expectation data, frozen
+inputs, engine source, and decisions. Run it twice and compare
+`input_fingerprint` and `decision_fingerprint`; timestamps and environment
+metadata may differ.
 
-The result for an operator is a much smaller first-pass queue without losing
-the vulnerabilities attackers are already using:
+See [docs/VALIDATION.md](docs/VALIDATION.md) for the reviewer protocol. Files
+under `benchmarks/` are retained as historical engineering artifacts and are
+not evidence of the current SSVC engine's real-world effectiveness.
 
-| User outcome | Reproducible result |
-|---|---:|
-| **First-pass review queue** | **26,356 → 550 findings (97.9% smaller)** |
-| **Known-exploited coverage** | **84 / 87 CISA KEV findings (97%)** |
-| **Lift over sorting by CVSS** | **84× more KEV surfaced (84 vs 1)** |
-| **Exploitation-probability captured** | **2.6× more EPSS mass** |
+## Deployment notes
 
-> **PatchTriage put 84 of 87 actively-exploited vulnerabilities into the same
-> weekly review budget that the industry-standard "sort by CVSS" approach
-> filled with only 1.** The queue is 50 findings per system across 11 systems;
-> the complete 26,356-finding benchmark and ground truth are reproducible.
-
-The setup: a security team can't patch everything at once. Say you can fix
-**50 findings this week** (a "budget" — one package upgrade usually closes
-many findings, so 50 is a light week). Which 50 do you pick? We compare two
-ways of choosing — sort by CVSS (what most teams do today) vs PatchTriage —
-and count how many of the *known-exploited* vulnerabilities (CISA KEV) each
-one's 50 picks actually include.
-
-We ran this against **11 pinned images of software enterprises actually
-self-host internally** — Jenkins, Nextcloud, Redmine, Nexus, Gitea, Grafana,
-SonarQube, Mattermost, Ghost, Metabase, WordPress — not base images or
-frameworks.
-
-| System | Findings | KEV caught — sort-by-CVSS | KEV caught — **PatchTriage** |
-|---|---|---|---|
-| Jenkins 2.319 | 1,267 | 0/10 | **10/10** |
-| Nextcloud 20 | 9,700 | 0/28 | **26/28** |
-| Redmine 4.1 | 9,432 | 0/22 | **21/22** |
-| Nexus 3.30 | 1,936 | 0/9 | **9/9** |
-| WordPress 5.5 | 2,137 | 0/16 | **16/16** |
-| Metabase 0.40 | 349 | 1/2 | **2/2** |
-| + Gitea, Grafana, SonarQube, Mattermost, Ghost | — | 0/0 | 0/0 |
-| **Total (11 systems, 26,356 findings)** | | **1 / 87 (1%)** | **84 / 87 (97%)** |
-
-So of the 87 vulnerabilities CISA confirms are being exploited in the wild,
-**PatchTriage's queue contained 84; the CVSS-sorted queue contained 1.**
-PatchTriage also captured 2.6x more exploitation-probability mass (EPSS).
-Full table: [docs/BENCHMARKS-systems-2026-07-11.md](docs/BENCHMARKS-systems-2026-07-11.md).
-
-**Why CVSS does so badly — and why doubling the budget doesn't save it:**
-these images carry hundreds of CVSS 9.x "critical" findings, while most
-known-exploited CVEs score lower (often 7–8). A CVSS-sorted budget fills up
-with 9.x criticals; the actually-exploited 7.x ones sit far below the cut. So
-even *doubling* the budget barely helps CVSS — it caught **1/87 at 25/system
-and still only 1/87 at 50/system** — while PatchTriage went 63→84. Ground
-truth is third-party (CISA KEV, FIRST EPSS), so the tool cannot grade its own
-homework.
-
-This archived benchmark ran the former deterministic backend. Current runs
-use the official SSVC Deployer tree; the `claude` / `cascade` AI backends add
-analyst-grade explanations but cannot change the SSVC action timing.
-
-The effect reproduces on other target sets — 18 end-of-life OS/runtime images
-(`targets_eol.txt`) give **1/118 vs 99/118**
-([docs/BENCHMARKS-2026-07-11.md](docs/BENCHMARKS-2026-07-11.md)). Run any set
-yourself:
+The GUI binds to localhost by default. For a trusted container or platform
+service, bind explicitly and supply its assigned port:
 
 ```bash
-./benchmarks/run_benchmark.sh                                  # 5 current images
-TARGETS_FILE=benchmarks/targets_systems.txt SCANNERS=trivy PRUNE=1 \
-  ./benchmarks/run_benchmark.sh                                # self-hosted systems
-TARGETS_FILE=benchmarks/targets_eol.txt SCANNERS=trivy \
-  ./benchmarks/run_benchmark.sh                                # 18 EOL images
-# -> benchmarks/out/BENCHMARKS.md with the aggregated comparison table
+patchtriage serve --host 0.0.0.0 --port 8765 --no-browser
 ```
 
-Local `trivy`/`grype` binaries are used when present; otherwise the script
-falls back to pinned `aquasec/trivy` / `anchore/grype` container images, so
-Docker alone reproduces the numbers. `SCANNERS=trivy` roughly halves runtime;
-`PRUNE=1` removes each image after scanning on large runs.
+On Render, create a **Web Service** and set the start command to:
 
-## Roadmap
+```bash
+patchtriage serve --host 0.0.0.0 --port $PORT --no-browser
+```
 
-* Automatic reachability collectors (manual inventory and runtime evidence are
-  already supported)
-* Exploit intelligence connectors (Metasploit and public PoC provenance)
-* Ecosystem-aware version comparison for multi-fix packages
-* Ticketing integrations (GitHub Issues / Jira)
+Do not use `patchtriage demo` as a web-service start command: it writes a
+report and exits, so no port remains open. Place any internet-facing instance
+behind the access controls appropriate for vulnerability and asset data.
+
+## Limits
+
+- PatchTriage does not apply patches.
+- It is not a replacement for a vulnerability scanner.
+- An empty result is not proof that a target is secure.
+- SSVC depends on accurate organizational context and current threat evidence.
+- The built-in evaluation compares queue orderings on the supplied inventory;
+  it is not independent ground truth for remediation effectiveness.
+- Human review remains required for inferred inputs and important deployment
+  decisions.
 
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-python -m pytest tests/
+python -m pip install -e ".[dev]"
+pytest -q
+patchtriage verify --repeats 25 --output verification_report.json
 ```
-
-CI (GitHub Actions) runs the test suite on Python 3.10–3.12, executes the
-full offline demo end-to-end, and builds + runs the Docker image on every
-push.
 
 ## License
 
-Apache-2.0
+[Apache License 2.0](LICENSE)

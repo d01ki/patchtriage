@@ -31,7 +31,9 @@ def asset_from_target(target: dict) -> Asset:
     """Build the exact asset context consumed by the SSVC engine.
 
     Keeping this conversion pure makes it possible to verify that values
-    entered in the GUI reach the decision engine unchanged.
+    entered in the GUI reach the decision engine unchanged. Automatable is a
+    vulnerability-specific SSVC point, so the web target never applies one
+    value to every finding; the engine derives it per vulnerability instead.
     """
     return Asset(
         identifier=target["name"],
@@ -41,7 +43,7 @@ def asset_from_target(target: dict) -> Asset:
         reachable=target.get("reachable"),
         runtime_observed=target.get("runtime_observed"),
         system_exposure=target.get("system_exposure", "unknown"),
-        automatable=target.get("automatable", "unknown"),
+        automatable="unknown",
         mission_impact=target.get("mission_impact", "unknown"),
         safety_impact=target.get("safety_impact", "unknown"),
         context_sources=target.get("context_sources") or [],
@@ -64,7 +66,9 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
     override = asset_from_target(target)
     raw = load_file(source, asset=override)
     findings = dedup(raw)
-    if target.get("demo"):
+    if not findings:
+        pass
+    elif target.get("demo"):
         data = resources.files("patchtriage") / "data"
         snapshots = {
             name: json.loads((data / f"demo_{name}.json").read_text(encoding="utf-8"))
@@ -208,11 +212,20 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         ),
         "evaluated_context": {
             "system_exposure": override.system_exposure,
-            "automatable": override.automatable,
             "mission_impact": override.mission_impact,
             "safety_impact": override.safety_impact,
             "context_sources": override.context_sources,
         },
+        "result_state": (
+            "no_findings" if not findings else
+            "assessed" if actions else "no_plan"
+        ),
+        "result_message": (
+            "No vulnerabilities were found in the attached scan or SBOM."
+            if not findings else
+            "Assessment completed, but no remediation action could be built."
+            if not actions else ""
+        ),
         "ssvc_confirmation_fields": confirmation_fields,
         "explanation": explanation,
         "comparison": comparison,

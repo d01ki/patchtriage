@@ -183,7 +183,6 @@ class Handler(BaseHTTPRequestHandler):
                 reachable=True,
                 runtime_observed=True,
                 system_exposure="open",
-                automatable="yes",
                 mission_impact="mef_failure",
                 safety_impact="critical",
                 context_sources=["OpenTelemetry", "Falco"],
@@ -208,7 +207,6 @@ class Handler(BaseHTTPRequestHandler):
                     reachable=body.get("reachable"),
                     runtime_observed=body.get("runtime_observed"),
                     system_exposure=body.get("system_exposure", "unknown"),
-                    automatable=body.get("automatable", "unknown"),
                     mission_impact=body.get("mission_impact", "unknown"),
                     safety_impact=body.get("safety_impact", "unknown"),
                     context_sources=body.get("context_sources"),
@@ -224,7 +222,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_json()
             allowed = {
                 "criticality", "internet_exposed", "reachable",
-                "runtime_observed", "system_exposure", "automatable",
+                "runtime_observed", "system_exposure",
                 "mission_impact", "safety_impact", "context_sources",
             }
             try:

@@ -112,6 +112,8 @@ def test_security_headers_are_present(server):
         assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
     assert "Run the offline demo" in page
     assert "Patch what matters" in page
+    assert "97.9% less review noise" in page
+    assert "P1 · Patch Immediately" in page
 
 
 def test_reject_non_scan_non_sbom(server):
@@ -156,6 +158,21 @@ def test_offline_arsenal_demo_runs_end_to_end(server):
     assert summary["comparison"]["kev"] == {
         "cvss": 0, "epss": 1, "patchtriage": 1,
     }
+    assert summary["comparison"]["outcome"] == {
+        "reviewed": 1,
+        "review_reduction_pct": 66.7,
+        "kev_coverage_pct": 100.0,
+        "kev_gain_points": 100.0,
+        "additional_kev_vs_cvss": 1,
+        "kev_lift_vs_cvss": None,
+    }
+    assert summary["top_priority_label"] == "Patch Immediately"
+    assert summary["top_deadline_days"] == 3
+    assert summary["explanation"]["priority_label"] == "Patch Immediately"
+    assert summary["explanation"]["basis"].startswith(
+        "P1 because CISA KEV confirms"
+    )
+    assert summary["explanation"]["checks"][0]["status"] == "confirmed"
     assert summary["explanation"]["factors"]["runtime_observed"] is True
     assert summary["duration_ms"] >= 0
     status, same_target = _req("POST", server + "/api/demo", {})

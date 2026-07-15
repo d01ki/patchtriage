@@ -39,6 +39,7 @@ from .evalcmp import evaluate
 from .ingest.parsers import load_file
 from .models import Asset
 from .plan import build_plan
+from .presentation import priority_definition
 from .report.html import render_html
 from .triage.audit import audit_all
 from .triage.engine import get_backend, run_triage, run_triage_batch
@@ -496,11 +497,13 @@ def demo(
 
 def _print_actions(actions) -> None:
     table = Table(title="Remediation plan - highest risk reduced first")
-    for col in ("#", "Pri", "Action", "CVEs", "KEV", "Due", "Risk cut"):
+    for col in ("#", "Priority", "Action", "CVEs", "KEV", "Due", "Risk cut"):
         table.add_column(col)
     for i, a in enumerate(actions[:15], 1):
         style = {"P1": "bold red", "P2": "yellow"}.get(a.top_priority, "")
-        pri = f"[{style}]{a.top_priority}[/{style}]" if style else a.top_priority
+        priority = priority_definition(a.top_priority)
+        pri_text = f"{a.top_priority} {priority['label']}"
+        pri = f"[{style}]{pri_text}[/{style}]" if style else pri_text
         table.add_row(str(i), pri, a.summary[:60], str(len(a.cves)),
                       str(a.kev_count) if a.kev_count else "-",
                       f"{a.deadline_days}d", f"{a.risk_reduced:.2f}")

@@ -373,8 +373,6 @@ def start():
 
         exposure = ask_ssvc(
             "SSVC System Exposure", ("open", "controlled", "small", "unknown"))
-        automatable = ask_ssvc(
-            "SSVC Automatable", ("yes", "no", "unknown"))
         mission = ask_ssvc(
             "SSVC Mission Impact",
             ("mission_failure", "mef_failure", "mef_support_crippled",
@@ -389,11 +387,11 @@ def start():
         runtime_observed = typer.confirm(
             "Was the component/path observed at runtime?", default=False)
         if (any(value != "unknown" for value in
-                (exposure, automatable, mission, safety))
+                (exposure, mission, safety))
                 or reachable or runtime_observed):
             override = Asset(
                 identifier="interactive", kind="host",
-                system_exposure=exposure, automatable=automatable,
+                system_exposure=exposure,
                 mission_impact=mission, safety_impact=safety,
                 reachable=reachable or None,
                 runtime_observed=runtime_observed or None,

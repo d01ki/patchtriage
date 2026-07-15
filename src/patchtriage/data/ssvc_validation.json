@@ -37,7 +37,7 @@
     "mission_order": ["degraded", "mef_support_crippled", "mef_failure", "mission_failure"],
     "rows": [
       {"safety_impact": "negligible", "expected": ["low", "low", "medium", "very_high"]},
-      {"safety_impact": "marginal", "expected": ["low", "low", "medium", "very_high"]},
+      {"safety_impact": "marginal", "expected": ["low", "low", "high", "very_high"]},
       {"safety_impact": "critical", "expected": ["medium", "high", "high", "very_high"]},
       {"safety_impact": "catastrophic", "expected": ["very_high", "very_high", "very_high", "very_high"]}
     ]
@@ -45,17 +45,17 @@
   "target_sensitivity": [
     {
       "name": "same-active-cve-open-high-impact",
-      "context": {"system_exposure": "open", "automatable": "yes", "mission_impact": "mef_failure", "safety_impact": "critical"},
+      "context": {"system_exposure": "open", "mission_impact": "mission_failure", "safety_impact": "critical"},
       "expected_decision": "immediate"
     },
     {
       "name": "same-active-cve-controlled-high-impact",
-      "context": {"system_exposure": "controlled", "automatable": "yes", "mission_impact": "mef_failure", "safety_impact": "critical"},
+      "context": {"system_exposure": "controlled", "mission_impact": "mef_failure", "safety_impact": "critical"},
       "expected_decision": "out_of_cycle"
     },
     {
       "name": "same-active-cve-small-low-impact",
-      "context": {"system_exposure": "small", "automatable": "no", "mission_impact": "degraded", "safety_impact": "negligible"},
+      "context": {"system_exposure": "small", "mission_impact": "degraded", "safety_impact": "negligible"},
       "expected_decision": "scheduled"
     }
   ],
@@ -70,7 +70,7 @@
     "needs_confirmation": ["system_exposure", "automatable", "mission_impact", "safety_impact"]
   },
   "demo_expected": {
-    "CVE-2023-4911": "immediate",
+    "CVE-2023-4911": "out_of_cycle",
     "CVE-2024-3094": "scheduled",
     "CVE-2021-23337": "scheduled"
   }

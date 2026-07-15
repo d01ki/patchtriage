@@ -104,6 +104,19 @@ def render_html(findings: list[Finding], actions: list[Action],
                 f'{_esc(", ".join(value.replace("_", " ") for value in confirmation))}. Conservative defaults remain '
                 'active until reviewed.</p>' if confirmation else ""
             )
+            enrichment = lead_finding.enrichment
+            cvss = enrichment.nvd_cvss_score or lead_finding.cvss_score
+            epss = enrichment.epss_score
+            signal_values = (
+                ("CVSS", f"{cvss:.1f}" if cvss is not None else "Not available"),
+                ("EPSS (30 day)", f"{epss * 100:.1f}%" if epss is not None else "Not available"),
+                ("CISA KEV", "Listed" if enrichment.in_cisa_kev else "Not listed"),
+                ("Fix", "Available" if lead_finding.package.fixed_version else "Not supplied"),
+            )
+            signals_html = "".join(
+                f'<div class="signal"><span>{_esc(label)}</span><b>{_esc(value)}</b></div>'
+                for label, value in signal_values
+            )
             explain_html = f"""
     <section>
       <h2>Why {_esc(ssvc.get('decision_label', priority_info['label']))}?</h2>
@@ -115,8 +128,22 @@ def render_html(findings: list[Finding], actions: list[Action],
         <div class="whynode decisionnode"><span>{_esc(ssvc.get('decision_label', priority_info['label']))}</span><b>{_esc(lead.summary)}</b>
           <small>SSVC {_esc(ssvc.get('decision_label', 'Unknown'))} · default SLE ≤ {lead.deadline_days} days</small></div>
       </div>
+      <p class="scorenote"><b>Categorical outcome — no aggregate SSVC score.</b>
+      Supporting signals remain visible. Inside the same outcome, SSVC
+      decision points are compared first, followed by EPSS and CVSS
+      tie-breakers; none are added together into a score.</p>
+      <div class="signals">{signals_html}</div>
       {confirmation_html}
       <ul class="evidence">{checks_html}</ul>
+    </section>"""
+
+    if not findings:
+        explain_html = """
+    <section class="emptyreport">
+      <h2>No vulnerabilities found in the attached evidence</h2>
+      <p>The scan or resolved SBOM produced zero vulnerability records. This is
+      different from a Defer decision: no SSVC assessment was required. Confirm
+      that the input covers the intended target and rerun after the next scan.</p>
     </section>"""
 
     # segmented priority spine
@@ -287,7 +314,7 @@ def render_html(findings: list[Finding], actions: list[Action],
   }}
   * {{ box-sizing:border-box; }}
   body {{ margin:0; background:var(--paper); color:var(--ink);
-         font:15px/1.55 "Segoe UI", "Helvetica Neue", Arial, sans-serif; }}
+         font:16px/1.58 "Segoe UI", "Helvetica Neue", Arial, sans-serif; }}
   .mono, td.mono {{ font-family:ui-monospace, "SF Mono", Menlo, Consolas, monospace;
                     font-size:13px; }}
   header {{ background:var(--slate); color:#EEF1F6; padding:28px 40px 22px; }}
@@ -354,6 +381,15 @@ def render_html(findings: list[Finding], actions: list[Action],
   .decisionnode {{ background:#EEF0FF; border-color:#BFC5FF; }}
   .confirm {{ background:#FFF7ED; border:1px solid #FED7AA; color:#9A3412;
               border-radius:5px; padding:9px 12px; font-size:12px; }}
+  .scorenote {{ background:#F8F9FC; border:1px solid var(--rule); color:var(--muted);
+                border-radius:5px; padding:10px 12px; font-size:12px; margin:10px 0 0; }}
+  .scorenote b {{ color:var(--ink); }}
+  .signals {{ display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin-top:7px; }}
+  .signal {{ background:#fff; border:1px solid var(--rule); border-radius:5px; padding:9px; }}
+  .signal span {{ display:block; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.06em; }}
+  .signal b {{ display:block; margin-top:3px; font:700 13px ui-monospace,monospace; }}
+  .emptyreport {{ background:#fff; border:1px solid var(--rule); border-radius:6px; padding:4px 18px 18px; }}
+  .emptyreport p {{ color:var(--muted); max-width:76ch; }}
   .evidence {{ list-style:none; padding:0; margin:10px 0 0; display:grid;
                grid-template-columns:repeat(5,1fr); gap:7px; }}
   .evidence li {{ background:#fff; border:1px solid var(--rule); border-radius:5px;
@@ -376,7 +412,7 @@ def render_html(findings: list[Finding], actions: list[Action],
   footer {{ text-align:center; color:var(--muted); font-size:12px; padding:20px; }}
   @media (max-width:900px) {{ .whyflow {{ grid-template-columns:1fr; }} .whyop {{ transform:rotate(90deg); }} .priorityguide,.evidence {{ grid-template-columns:1fr 1fr; }} }}
   @media (max-width:760px) {{ main, header, .spinewrap {{ padding-left:16px; padding-right:16px; }} }}
-  @media (max-width:600px) {{ .priorityguide,.evidence,.outcomecards {{ grid-template-columns:1fr; }} }}
+  @media (max-width:600px) {{ .priorityguide,.evidence,.outcomecards,.signals {{ grid-template-columns:1fr; }} }}
 </style></head>
 <body>
 <header>

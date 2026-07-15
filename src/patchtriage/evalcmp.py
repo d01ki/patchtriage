@@ -90,6 +90,8 @@ def _order_epss(findings: list[Finding]) -> list[Finding]:
 
 def evaluate(findings: list[Finding],
              budgets: list[int] | None = None) -> list[EvalRow]:
+    if not findings:
+        return []
     base = _order_baseline(findings)
     epss_order = _order_epss(findings)
     kev_order = _order_kev(findings)

@@ -74,7 +74,7 @@ def test_add_and_delete_target(server):
     status, t = _req("POST", server + "/api/targets",
                      {"name": "checkout", "url": "https://example.com",
                       "criticality": "critical", "internet_exposed": True,
-                      "system_exposure": "open", "automatable": "yes",
+                      "system_exposure": "open",
                       "mission_impact": "mef_failure",
                       "safety_impact": "marginal",
                       "reachable": True, "runtime_observed": True,
@@ -83,7 +83,7 @@ def test_add_and_delete_target(server):
     assert t["name"] == "checkout" and t["url"] == "https://example.com"
     assert t["reachable"] is True and t["runtime_observed"] is True
     assert t["system_exposure"] == "open"
-    assert t["automatable"] == "yes"
+    assert t["automatable"] == "unknown"
     assert t["mission_impact"] == "mef_failure"
     assert t["safety_impact"] == "marginal"
     assert t["context_sources"] == ["otel"]
@@ -123,6 +123,11 @@ def test_security_headers_are_present(server):
     assert "Patch what matters" in page
     assert "Severity informs. Your environment decides." in page
     assert "Immediate decisions" in page
+    assert "Attach scan / SBOM" in page
+    assert "CycloneDX / SPDX SBOM" in page
+    assert "Categorical outcome — no aggregate SSVC score" in page
+    assert "Automatable is evaluated separately for each vulnerability" in page
+    assert 'id="f-automatable"' not in page
     assert "Black Hat" not in page
     assert "Arsenal" not in page
     assert "LOCAL DECISION ENGINE" not in page
@@ -134,13 +139,13 @@ def test_updates_and_validates_ssvc_context(server):
     _, target = _req("POST", server + "/api/targets", {"name": "context"})
     status, updated = _req(
         "POST", server + f"/api/targets/{target['id']}/context",
-        {"system_exposure": "controlled", "automatable": "no",
+        {"system_exposure": "controlled",
          "mission_impact": "mef_support_crippled",
          "safety_impact": "critical", "context_sources": ["CMDB"]},
     )
     assert status == 200
     assert updated["system_exposure"] == "controlled"
-    assert updated["automatable"] == "no"
+    assert updated["automatable"] == "unknown"
     assert updated["mission_impact"] == "mef_support_crippled"
     assert updated["safety_impact"] == "critical"
     assert updated["context_sources"] == ["CMDB"]
@@ -179,6 +184,34 @@ def test_source_detects_sbom_format(server):
     assert resp["format"] == "spdx"
 
 
+def test_empty_scan_is_reported_as_no_vulnerabilities(server):
+    _, target = _req("POST", server + "/api/targets", {"name": "empty-scan"})
+    content = json.dumps({
+        "SchemaVersion": 2,
+        "ArtifactName": "empty:latest",
+        "ArtifactType": "container_image",
+        "Results": [],
+    })
+    status, _ = _req(
+        "POST", server + f"/api/targets/{target['id']}/source",
+        {"content": content, "filename": "empty-trivy.json"},
+    )
+    assert status == 200
+    status, summary = _req(
+        "POST", server + f"/api/targets/{target['id']}/run",
+        {"backend": "rules"},
+    )
+    assert status == 200
+    assert summary["total"] == 0
+    assert summary["actions"] == 0
+    assert summary["result_state"] == "no_findings"
+    assert summary["result_message"] == (
+        "No vulnerabilities were found in the attached scan or SBOM."
+    )
+    assert summary["top_ssvc_decision"] == ""
+    assert summary["comparison"] is None
+
+
 def test_offline_demo_runs_end_to_end(server):
     status, target = _req("POST", server + "/api/demo", {})
     assert status == 201
@@ -209,21 +242,21 @@ def test_offline_demo_runs_end_to_end(server):
         "total": 1, "cvss": 0, "epss": 1, "kev": 1, "ssvc": 1,
     }
     assert summary["outcomes"] == {
-        "immediate": 1, "out_of_cycle": 0, "scheduled": 2, "defer": 0,
+        "immediate": 0, "out_of_cycle": 1, "scheduled": 2, "defer": 0,
     }
-    assert summary["top_ssvc_decision"] == "Immediate"
-    assert summary["ssvc_confirmation_fields"] == []
-    assert summary["top_deadline_days"] == 3
-    assert summary["explanation"]["outcome_label"] == "Immediate"
+    assert summary["top_ssvc_decision"] == "Out-of-Cycle"
+    assert summary["ssvc_confirmation_fields"] == ["automatable"]
+    assert summary["top_deadline_days"] == 14
+    assert summary["explanation"]["outcome_label"] == "Out-of-Cycle"
     assert summary["explanation"]["basis"].startswith(
         "The SSVC Deployer path"
     )
     assert summary["evaluated_context"] == {
-        "system_exposure": "open", "automatable": "yes",
+        "system_exposure": "open",
         "mission_impact": "mef_failure", "safety_impact": "critical",
         "context_sources": ["OpenTelemetry", "Falco"],
     }
-    assert summary["explanation"]["ssvc"]["decision"] == "immediate"
+    assert summary["explanation"]["ssvc"]["decision"] == "out_of_cycle"
     assert summary["explanation"]["checks"][0]["status"] == "confirmed"
     assert summary["explanation"]["ssvc"]["supplemental"]["runtime_observed"] is True
     assert summary["duration_ms"] >= 0

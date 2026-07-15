@@ -165,6 +165,10 @@ def test_eval_patchtriage_beats_cvss_at_k1():
     assert rows[0].epss_patchtriage > rows[0].epss_baseline
 
 
+def test_eval_empty_inventory_has_no_comparison_rows():
+    assert evaluate([]) == []
+
+
 def test_priority_is_explained_in_plain_language_and_evidence():
     findings = _triaged_findings()
     libc = next(f for f in findings if "libc" in f.package.name)
@@ -218,6 +222,13 @@ def test_html_report_renders_vendor_evidence():
     assert "Official vendor advisories" in html
     assert "DEBIAN" in html
     assert "2.36-9+deb12u3" in html
+
+
+def test_html_report_explains_empty_input_without_a_false_comparison():
+    html = render_html([], [], evaluate([]))
+    assert "No vulnerabilities found in the attached evidence" in html
+    assert "different from a Defer decision" in html
+    assert "Outcome at a top-" not in html
 
 
 # ---------------------------------------------------------------- audit layer

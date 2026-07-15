@@ -404,6 +404,9 @@ def derive_human_impact(mission: MissionImpact,
         if mission == MissionImpact.DEGRADED:
             return HumanImpact.MEDIUM
         return HumanImpact.HIGH
+    if (safety == SafetyImpact.MARGINAL
+            and mission == MissionImpact.MEF_FAILURE):
+        return HumanImpact.HIGH
     if mission == MissionImpact.MEF_FAILURE:
         return HumanImpact.MEDIUM
     return HumanImpact.LOW

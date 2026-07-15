@@ -49,13 +49,15 @@ backend. Only the target context is changed:
 
 | Target context | Expected and observed SSVC outcome |
 |---|---|
-| Open, Automatable Yes, MEF Failure, Critical safety | Immediate |
-| Controlled, Automatable Yes, MEF Failure, Critical safety | Out-of-Cycle |
-| Small, Automatable No, Degraded mission, Negligible safety | Scheduled |
+| Open, Mission Failure, Critical safety | Immediate |
+| Controlled, MEF Failure, Critical safety | Out-of-Cycle |
+| Small, Degraded mission, Negligible safety | Scheduled |
 
-If target input is ignored, this test cannot pass: the three findings have the
-same vulnerability and threat evidence but must produce three different
-published SSVC paths. Each row in the JSON evidence records both
+Automatable is held constant and derived per vulnerability from the same frozen
+CVSS evidence; it is not a target-wide GUI input. If target input is ignored,
+this test cannot pass: the three findings have the same vulnerability and
+threat evidence but must produce three different published SSVC paths. Each row
+in the JSON evidence records both
 `target_context_entered` and `target_context_consumed`.
 
 ## How a reviewer should reproduce it
@@ -89,8 +91,10 @@ evaluation:
 
 1. Freeze a new scanner corpus, enrichment snapshots, target profiles, tool
    commit, and hashes before observing results.
-2. Have target owners label System Exposure, Automatable, Mission Impact, and
-   Safety Impact without seeing PatchTriage output.
+2. Have target owners label System Exposure, Mission Impact, and Safety Impact
+   without seeing PatchTriage output. Label vulnerability-specific Automatable
+   independently from the target profile or adjudicate the tool's CVSS-based
+   inference.
 3. Have at least two independent security practitioners assign expected SSVC
    outcomes from the official tables; adjudicate disagreements and report
    inter-rater agreement.

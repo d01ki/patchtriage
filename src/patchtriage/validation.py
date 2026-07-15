@@ -131,7 +131,7 @@ def _target_sensitivity_check(spec: dict) -> tuple[dict, list[dict], list[Findin
     observations: list[dict] = []
     findings: list[Finding] = []
     expected_fields = (
-        "system_exposure", "automatable", "mission_impact", "safety_impact",
+        "system_exposure", "mission_impact", "safety_impact",
     )
     data = resources.files("patchtriage") / "data"
     snapshots = {
@@ -163,6 +163,10 @@ def _target_sensitivity_check(spec: dict) -> tuple[dict, list[dict], list[Findin
                 "pipeline": "Trivy -> target mapping -> snapshot enrichment -> SSVC",
                 "target_context_entered": scenario["context"],
                 "target_context_consumed": mapped,
+                "vulnerability_automatable": {
+                    "value": ssvc["automatable"]["value"],
+                    "source": ssvc["automatable"]["source"],
+                },
                 "expected_decision": scenario["expected_decision"],
                 "actual_decision": ssvc["decision"],
                 "decision_path": ssvc["decision_path"],
@@ -296,7 +300,6 @@ def _demo_run() -> tuple[dict[str, str], dict]:
             "package": finding.package.name,
             "asset_context": {
                 "system_exposure": finding.asset.system_exposure,
-                "automatable": finding.asset.automatable,
                 "mission_impact": finding.asset.mission_impact,
                 "safety_impact": finding.asset.safety_impact,
             },

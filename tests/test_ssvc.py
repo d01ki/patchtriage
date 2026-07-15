@@ -120,7 +120,7 @@ def test_human_impact_combination_table_boundaries():
     ) == HumanImpact.LOW
     assert derive_human_impact(
         MissionImpact.MEF_FAILURE, SafetyImpact.MARGINAL
-    ) == HumanImpact.MEDIUM
+    ) == HumanImpact.HIGH
     assert derive_human_impact(
         MissionImpact.MEF_SUPPORT_CRIPPLED, SafetyImpact.CRITICAL
     ) == HumanImpact.HIGH
@@ -139,7 +139,7 @@ def test_human_impact_table_covers_all_16_official_rows():
         ),
         SafetyImpact.MARGINAL: (
             HumanImpact.LOW, HumanImpact.LOW,
-            HumanImpact.MEDIUM, HumanImpact.VERY_HIGH,
+            HumanImpact.HIGH, HumanImpact.VERY_HIGH,
         ),
         SafetyImpact.CRITICAL: (
             HumanImpact.MEDIUM, HumanImpact.HIGH,

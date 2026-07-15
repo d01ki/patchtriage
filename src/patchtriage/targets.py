@@ -8,8 +8,10 @@ a list of them, each with:
   * url           a link to the system (dashboard, repo, runbook) — shown as a
                   clickable link in the GUI so reviewers/operators can jump
                   straight to it
-  * criticality   business criticality (drives risk weighting)
-  * internet_exposed
+  * system_exposure, automatable, mission_impact, safety_impact
+                  explicit SSVC Deployer context
+  * reachable/runtime_observed
+                  supplemental confidence evidence
   * source        an attached scan (Trivy/Grype/OSV JSON) or SBOM
                   (CycloneDX/SPDX), stored alongside the registry
 
@@ -32,6 +34,17 @@ from . import config as cfgmod
 _LOCK = threading.RLock()
 _TARGET_ID = re.compile(r"^[0-9a-f]{12}$")
 _CRITICALITIES = {"critical", "high", "medium", "low", "unknown"}
+_SSVC_CHOICES = {
+    "system_exposure": {"small", "controlled", "open", "unknown"},
+    "automatable": {"yes", "no", "unknown"},
+    "mission_impact": {
+        "degraded", "mef_support_crippled", "mef_failure",
+        "mission_failure", "unknown",
+    },
+    "safety_impact": {
+        "negligible", "marginal", "critical", "catastrophic", "unknown",
+    },
+}
 
 
 def _validate_target_id(target_id: str) -> str:
@@ -79,6 +92,16 @@ def _clean_sources(value) -> list[str]:
     return [str(item).strip()[:80] for item in value[:10] if str(item).strip()]
 
 
+def _clean_ssvc(value: str | None, field: str) -> str:
+    if field == "automatable" and isinstance(value, bool):
+        return "yes" if value else "no"
+    normalized = str(value or "unknown").strip().lower().replace("-", "_")
+    if normalized not in _SSVC_CHOICES[field]:
+        allowed = ", ".join(sorted(_SSVC_CHOICES[field]))
+        raise ValueError(f"{field} must be one of: {allowed}")
+    return normalized
+
+
 def _clean_bool(value, field: str, optional: bool = False) -> bool | None:
     if value is None and optional:
         return None
@@ -118,9 +141,13 @@ def save_targets(targets: list[dict]) -> None:
 
 
 def add_target(name: str, url: str = "", criticality: str = "unknown",
-               internet_exposed: bool = False,
+               internet_exposed: bool | None = None,
                reachable: bool | None = None,
                runtime_observed: bool | None = None,
+               system_exposure: str = "unknown",
+               automatable: str = "unknown",
+               mission_impact: str = "unknown",
+               safety_impact: str = "unknown",
                context_sources: list[str] | None = None,
                demo: bool = False) -> dict:
     with _LOCK:
@@ -130,10 +157,16 @@ def add_target(name: str, url: str = "", criticality: str = "unknown",
             "name": _clean_name(name),
             "url": _clean_url(url),
             "criticality": _clean_criticality(criticality),
-            "internet_exposed": _clean_bool(internet_exposed, "internet_exposed"),
+            "internet_exposed": _clean_bool(
+                internet_exposed, "internet_exposed", optional=True),
             "reachable": _clean_bool(reachable, "reachable", optional=True),
             "runtime_observed": _clean_bool(
                 runtime_observed, "runtime_observed", optional=True),
+            "system_exposure": _clean_ssvc(
+                system_exposure, "system_exposure"),
+            "automatable": _clean_ssvc(automatable, "automatable"),
+            "mission_impact": _clean_ssvc(mission_impact, "mission_impact"),
+            "safety_impact": _clean_ssvc(safety_impact, "safety_impact"),
             "context_sources": _clean_sources(context_sources),
             "demo": bool(demo),
             "source_file": "",
@@ -158,8 +191,11 @@ def update_target(target_id: str, **fields) -> dict | None:
                 if fields.get("criticality") is not None:
                     t["criticality"] = _clean_criticality(fields["criticality"])
                 for key in ("internet_exposed", "reachable", "runtime_observed"):
+                    if key in fields:
+                        t[key] = _clean_bool(fields[key], key, optional=True)
+                for key in _SSVC_CHOICES:
                     if key in fields and fields[key] is not None:
-                        t[key] = _clean_bool(fields[key], key)
+                        t[key] = _clean_ssvc(fields[key], key)
                 if fields.get("context_sources") is not None:
                     t["context_sources"] = _clean_sources(fields["context_sources"])
                 for key in ("source_file", "source_format"):

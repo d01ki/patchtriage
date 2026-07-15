@@ -1,0 +1,77 @@
+{
+  "schema": "patchtriage-validation:1.0.0",
+  "sources": {
+    "deployer": "https://certcc.github.io/SSVC/howto/deployer_tree/",
+    "human_impact": "https://certcc.github.io/SSVC/reference/decision_points/human_impact/"
+  },
+  "deployer": {
+    "human_impact_order": ["low", "medium", "high", "very_high"],
+    "outcome_codes": {
+      "D": "defer",
+      "S": "scheduled",
+      "O": "out_of_cycle",
+      "I": "immediate"
+    },
+    "rows": [
+      {"exploitation": "none", "system_exposure": "small", "automatable": "no", "expected": "DDSS"},
+      {"exploitation": "none", "system_exposure": "small", "automatable": "yes", "expected": "DSSS"},
+      {"exploitation": "none", "system_exposure": "controlled", "automatable": "no", "expected": "DSSS"},
+      {"exploitation": "none", "system_exposure": "controlled", "automatable": "yes", "expected": "SSSS"},
+      {"exploitation": "none", "system_exposure": "open", "automatable": "no", "expected": "DSSS"},
+      {"exploitation": "none", "system_exposure": "open", "automatable": "yes", "expected": "SSSO"},
+      {"exploitation": "public_poc", "system_exposure": "small", "automatable": "no", "expected": "DSSS"},
+      {"exploitation": "public_poc", "system_exposure": "small", "automatable": "yes", "expected": "SSSS"},
+      {"exploitation": "public_poc", "system_exposure": "controlled", "automatable": "no", "expected": "DSSS"},
+      {"exploitation": "public_poc", "system_exposure": "controlled", "automatable": "yes", "expected": "SSSO"},
+      {"exploitation": "public_poc", "system_exposure": "open", "automatable": "no", "expected": "SSSO"},
+      {"exploitation": "public_poc", "system_exposure": "open", "automatable": "yes", "expected": "SSOO"},
+      {"exploitation": "active", "system_exposure": "small", "automatable": "no", "expected": "SSOO"},
+      {"exploitation": "active", "system_exposure": "small", "automatable": "yes", "expected": "SOOO"},
+      {"exploitation": "active", "system_exposure": "controlled", "automatable": "no", "expected": "SSOO"},
+      {"exploitation": "active", "system_exposure": "controlled", "automatable": "yes", "expected": "OOOO"},
+      {"exploitation": "active", "system_exposure": "open", "automatable": "no", "expected": "SOOI"},
+      {"exploitation": "active", "system_exposure": "open", "automatable": "yes", "expected": "OOII"}
+    ]
+  },
+  "human_impact": {
+    "mission_order": ["degraded", "mef_support_crippled", "mef_failure", "mission_failure"],
+    "rows": [
+      {"safety_impact": "negligible", "expected": ["low", "low", "medium", "very_high"]},
+      {"safety_impact": "marginal", "expected": ["low", "low", "medium", "very_high"]},
+      {"safety_impact": "critical", "expected": ["medium", "high", "high", "very_high"]},
+      {"safety_impact": "catastrophic", "expected": ["very_high", "very_high", "very_high", "very_high"]}
+    ]
+  },
+  "target_sensitivity": [
+    {
+      "name": "same-active-cve-open-high-impact",
+      "context": {"system_exposure": "open", "automatable": "yes", "mission_impact": "mef_failure", "safety_impact": "critical"},
+      "expected_decision": "immediate"
+    },
+    {
+      "name": "same-active-cve-controlled-high-impact",
+      "context": {"system_exposure": "controlled", "automatable": "yes", "mission_impact": "mef_failure", "safety_impact": "critical"},
+      "expected_decision": "out_of_cycle"
+    },
+    {
+      "name": "same-active-cve-small-low-impact",
+      "context": {"system_exposure": "small", "automatable": "no", "mission_impact": "degraded", "safety_impact": "negligible"},
+      "expected_decision": "scheduled"
+    }
+  ],
+  "unknown_context": {
+    "expected": {
+      "system_exposure": "open",
+      "automatable": "yes",
+      "mission_impact": "mef_support_crippled",
+      "safety_impact": "marginal",
+      "decision": "scheduled"
+    },
+    "needs_confirmation": ["system_exposure", "automatable", "mission_impact", "safety_impact"]
+  },
+  "demo_expected": {
+    "CVE-2023-4911": "immediate",
+    "CVE-2024-3094": "scheduled",
+    "CVE-2021-23337": "scheduled"
+  }
+}

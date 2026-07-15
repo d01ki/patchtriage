@@ -167,6 +167,18 @@ def run(
     criticality: str = typer.Option("unknown", help="Asset criticality override"),
     exposed: Optional[bool] = typer.Option(
         None, "--exposed/--not-exposed", help="Asset internet exposure evidence"),
+    ssvc_exposure: str = typer.Option(
+        "unknown", "--ssvc-exposure",
+        help="SSVC System Exposure: small|controlled|open|unknown"),
+    ssvc_automatable: str = typer.Option(
+        "unknown", "--ssvc-automatable",
+        help="SSVC Automatable: yes|no|unknown"),
+    ssvc_mission_impact: str = typer.Option(
+        "unknown", "--ssvc-mission-impact",
+        help="SSVC Mission Impact: degraded|mef_support_crippled|mef_failure|mission_failure|unknown"),
+    ssvc_safety_impact: str = typer.Option(
+        "unknown", "--ssvc-safety-impact",
+        help="SSVC Safety Impact: negligible|marginal|critical|catastrophic|unknown"),
     reachable: Optional[bool] = typer.Option(
         None, "--reachable/--not-reachable",
         help="Static analysis says the vulnerable path is reachable"),
@@ -203,11 +215,18 @@ def run(
     triage = triage or cfgmod.load().get("default_backend") or "rules"
     override = None
     if (asset_id or exposed is not None or reachable is not None
-            or runtime_observed is not None or criticality != "unknown"):
+            or runtime_observed is not None or criticality != "unknown"
+            or ssvc_exposure != "unknown" or ssvc_automatable != "unknown"
+            or ssvc_mission_impact != "unknown"
+            or ssvc_safety_impact != "unknown"):
         override = Asset(identifier=asset_id or "override", kind="host",
                          criticality=criticality, internet_exposed=exposed,
                          reachable=reachable,
-                         runtime_observed=runtime_observed)
+                         runtime_observed=runtime_observed,
+                         system_exposure=ssvc_exposure,
+                         automatable=ssvc_automatable,
+                         mission_impact=ssvc_mission_impact,
+                         safety_impact=ssvc_safety_impact)
     findings, subset, actions, eval_rows = _pipeline(
         files, fmt, override, assets, not no_nvd, nvd_api_key, triage, model,
         limit, escalation_model=escalation_model, jobs=jobs, batch=batch,
@@ -342,14 +361,43 @@ def start():
     inventory = Path(assets_path) if assets_path else None
     override = None
     if inventory is None:
-        exposed = typer.confirm("Are these assets internet-exposed?",
-                                default=False)
-        criticality = typer.prompt(
-            "Business criticality [critical/high/medium/low/unknown]",
-            default="unknown").strip().lower()
-        if exposed or criticality != "unknown":
-            override = Asset(identifier="interactive", kind="host",
-                             criticality=criticality, internet_exposed=exposed)
+        def ask_ssvc(label: str, choices: tuple[str, ...]) -> str:
+            while True:
+                value = typer.prompt(
+                    f"{label} [{' / '.join(choices)}]",
+                    default="unknown",
+                ).strip().lower().replace("-", "_")
+                if value in choices:
+                    return value
+                console.print(f"[red]pick one of {', '.join(choices)}[/red]")
+
+        exposure = ask_ssvc(
+            "SSVC System Exposure", ("open", "controlled", "small", "unknown"))
+        automatable = ask_ssvc(
+            "SSVC Automatable", ("yes", "no", "unknown"))
+        mission = ask_ssvc(
+            "SSVC Mission Impact",
+            ("mission_failure", "mef_failure", "mef_support_crippled",
+             "degraded", "unknown"),
+        )
+        safety = ask_ssvc(
+            "SSVC Safety Impact",
+            ("catastrophic", "critical", "marginal", "negligible", "unknown"),
+        )
+        reachable = typer.confirm(
+            "Is the vulnerable path confirmed reachable?", default=False)
+        runtime_observed = typer.confirm(
+            "Was the component/path observed at runtime?", default=False)
+        if (any(value != "unknown" for value in
+                (exposure, automatable, mission, safety))
+                or reachable or runtime_observed):
+            override = Asset(
+                identifier="interactive", kind="host",
+                system_exposure=exposure, automatable=automatable,
+                mission_impact=mission, safety_impact=safety,
+                reachable=reachable or None,
+                runtime_observed=runtime_observed or None,
+            )
 
     # 3. triage backend
     console.print("\n[bold]3. Triage backend[/bold]")
@@ -439,6 +487,37 @@ def serve(
 
 
 @app.command()
+def verify(
+    output: Path = typer.Option(
+        Path("verification_report.json"),
+        help="Write the reviewer-readable JSON evidence report",
+    ),
+    repeats: int = typer.Option(
+        25, min=2, max=1000,
+        help="Repeat each fixed target-context decision this many times",
+    ),
+):
+    """Verify SSVC conformance, target sensitivity, and reproducibility offline."""
+    from .validation import write_validation_report
+
+    with console.status("running offline reproducibility verification..."):
+        report = write_validation_report(output, repeats=repeats)
+    table = Table(title="Reviewer verification")
+    table.add_column("Evidence")
+    table.add_column("Cases", justify="right")
+    table.add_column("Result")
+    for check in report["checks"]:
+        result = "[green]PASS[/green]" if check["passed"] else "[red]FAIL[/red]"
+        table.add_row(check["name"].replace("_", " "), str(check["cases"]), result)
+    console.print(table)
+    console.print(f"Input fingerprint: [bold]{report['input_fingerprint']}[/bold]")
+    console.print(f"Decision fingerprint: [bold]{report['decision_fingerprint']}[/bold]")
+    console.print(f"JSON evidence: [bold]{output.resolve()}[/bold]")
+    if report["status"] != "pass":
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def demo(
     html: Path = typer.Option(Path("demo_report.html"), help="HTML output path"),
     output: Path = typer.Option(Path("demo_report.json"), help="JSON output path"),
@@ -496,28 +575,30 @@ def demo(
 
 
 def _print_actions(actions) -> None:
-    table = Table(title="Remediation plan - highest risk reduced first")
-    for col in ("#", "Priority", "Action", "CVEs", "KEV", "Due", "Risk cut"):
+    table = Table(title="Remediation plan - SSVC deployment outcome first")
+    for col in ("#", "SSVC outcome", "Action", "CVEs", "KEV", "Due"):
         table.add_column(col)
     for i, a in enumerate(actions[:15], 1):
         style = {"P1": "bold red", "P2": "yellow"}.get(a.top_priority, "")
         priority = priority_definition(a.top_priority)
-        pri_text = f"{a.top_priority} {priority['label']}"
+        pri_text = priority["ssvc_outcome"]
         pri = f"[{style}]{pri_text}[/{style}]" if style else pri_text
         table.add_row(str(i), pri, a.summary[:60], str(len(a.cves)),
                       str(a.kev_count) if a.kev_count else "-",
-                      f"{a.deadline_days}d", f"{a.risk_reduced:.2f}")
+                      f"{a.deadline_days}d")
     console.print(table)
 
 
 def _print_eval(rows) -> None:
-    table = Table(title="Practicality check: CVSS vs EPSS vs PatchTriage")
-    for col in ("Budget", "KEV CVSS", "KEV EPSS", "KEV PT",
-                "EPSS mass CVSS", "EPSS mass EPSS", "EPSS mass PT"):
+    table = Table(title="Outcome check: CVSS vs EPSS vs KEV-first vs SSVC")
+    for col in ("Budget", "KEV CVSS", "KEV EPSS", "KEV first", "KEV SSVC",
+                "Urgent CVSS", "Urgent EPSS", "Urgent KEV", "Urgent SSVC"):
         table.add_column(col)
     for r in rows:
-        best_kev = max(r.kev_baseline, r.kev_epss, r.kev_patchtriage)
-        best_epss = max(r.epss_baseline, r.epss_epss, r.epss_patchtriage)
+        best_kev = max(r.kev_baseline, r.kev_epss, r.kev_kev, r.kev_ssvc)
+        best_urgent = max(
+            r.urgent_cvss, r.urgent_epss, r.urgent_kev, r.urgent_ssvc
+        )
 
         def best(value, maximum, text):
             return f"[bold green]{text}[/bold green]" if value == maximum else text
@@ -526,11 +607,16 @@ def _print_eval(rows) -> None:
             f"top {r.k}",
             best(r.kev_baseline, best_kev, f"{r.kev_baseline}/{r.kev_total}"),
             best(r.kev_epss, best_kev, f"{r.kev_epss}/{r.kev_total}"),
-            best(r.kev_patchtriage, best_kev,
-                 f"{r.kev_patchtriage}/{r.kev_total}"),
-            best(r.epss_baseline, best_epss, str(r.epss_baseline)),
-            best(r.epss_epss, best_epss, str(r.epss_epss)),
-            best(r.epss_patchtriage, best_epss, str(r.epss_patchtriage)),
+            best(r.kev_kev, best_kev, f"{r.kev_kev}/{r.kev_total}"),
+            best(r.kev_ssvc, best_kev, f"{r.kev_ssvc}/{r.kev_total}"),
+            best(r.urgent_cvss, best_urgent,
+                 f"{r.urgent_cvss}/{r.urgent_total}"),
+            best(r.urgent_epss, best_urgent,
+                 f"{r.urgent_epss}/{r.urgent_total}"),
+            best(r.urgent_kev, best_urgent,
+                 f"{r.urgent_kev}/{r.urgent_total}"),
+            best(r.urgent_ssvc, best_urgent,
+                 f"{r.urgent_ssvc}/{r.urgent_total}"),
         )
     console.print(table)
 

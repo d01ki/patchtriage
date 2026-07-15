@@ -1,9 +1,4 @@
-"""Human-facing labels and evidence summaries for triage decisions.
-
-The triage engine deliberately keeps compact machine values (P1-P4).  This
-module is the single presentation layer that turns those values into language
-an operator can act on without having to know PatchTriage's internals.
-"""
+"""Human-facing labels and evidence summaries for triage decisions."""
 
 from __future__ import annotations
 
@@ -13,32 +8,34 @@ from .models import Finding
 
 PRIORITY_DEFINITIONS: dict[str, dict[str, str]] = {
     "P1": {
-        "label": "Patch Immediately",
+        "label": "Immediate",
+        "ssvc_outcome": "Immediate",
         "description": (
-            "Active exploitation or very high near-term likelihood; act now."
+            "SSVC calls for immediate action with all necessary resources."
         ),
-        "window": "3-7 days",
+        "window": "3 days",
     },
     "P2": {
-        "label": "Patch Next",
+        "label": "Out-of-Cycle",
+        "ssvc_outcome": "Out-of-Cycle",
         "description": (
-            "High exploitation likelihood or exposed critical impact; put it "
-            "in the next patch window."
+            "Act at the next available opportunity outside normal maintenance."
         ),
         "window": "14 days",
     },
     "P3": {
-        "label": "Schedule Patch",
+        "label": "Scheduled",
+        "ssvc_outcome": "Scheduled",
         "description": (
-            "Material severity without stronger exploitation signals; handle "
-            "in the normal patch cycle."
+            "Handle during regularly scheduled maintenance."
         ),
         "window": "30 days",
     },
     "P4": {
-        "label": "Monitor / Defer",
+        "label": "Defer",
+        "ssvc_outcome": "Defer",
         "description": (
-            "Lower current risk signals; monitor for change and reassess."
+            "Do not act at present; monitor the evidence and reassess changes."
         ),
         "window": "90 days",
     },
@@ -57,106 +54,49 @@ def priority_display(priority: str | None) -> str:
 
 
 def priority_evidence(finding: Finding) -> list[dict[str, str]]:
-    """Build a compact checklist from the exact signals used by triage.
-
-    ``status`` is intentionally descriptive instead of boolean.  Missing
-    telemetry is not the same as evidence that a path is safe.
-    """
-    enrichment = finding.enrichment
-    score = enrichment.nvd_cvss_score or finding.cvss_score
-    epss = enrichment.epss_score
-    asset_signals = []
-    if finding.asset.internet_exposed is True:
-        asset_signals.append("internet-exposed")
-    if finding.asset.reachable is True:
-        asset_signals.append("reachable path")
-    if finding.asset.runtime_observed is True:
-        asset_signals.append("observed at runtime")
-
-    if enrichment.in_cisa_kev:
-        kev_status = "confirmed"
-        kev_value = "CISA KEV confirms exploitation in the wild"
-        if enrichment.kev_ransomware:
-            kev_value += "; ransomware use reported"
-    else:
-        kev_status = "not-observed"
-        kev_value = "Not listed in the loaded CISA KEV data"
-
-    if epss is None:
-        epss_status = "unknown"
-        epss_value = "FIRST EPSS unavailable"
-    elif epss >= 0.5:
-        epss_status = "confirmed"
-        epss_value = f"EPSS {epss * 100:.1f}% meets the P1 threshold (50%)"
-    elif epss >= 0.1:
-        epss_status = "confirmed"
-        epss_value = f"EPSS {epss * 100:.1f}% meets the P2 threshold (10%)"
-    else:
-        epss_status = "not-observed"
-        epss_value = f"EPSS {epss * 100:.1f}% is below escalation thresholds"
-
-    if asset_signals:
-        context_status = "confirmed"
-        context_value = ", ".join(asset_signals)
-    else:
-        context_status = "unknown"
-        context_value = "No positive exposure or runtime evidence supplied"
-
-    if score is None:
-        impact_status = "unknown"
-        impact_value = f"CVSS unavailable; scanner severity is {finding.severity.value}"
-    else:
-        impact_status = "confirmed" if score >= 7.0 else "not-observed"
-        impact_value = f"CVSS {score:g}" + (
-            " meets the high-impact threshold" if score >= 7.0
-            else " is below the high-impact threshold"
-        )
-
+    """Present the exact SSVC decision points without a parallel score model."""
+    ssvc = (finding.triage or {}).get("ssvc") or {}
+    point_names = (
+        ("exploitation", "Exploitation"),
+        ("system_exposure", "System Exposure"),
+        ("automatable", "Automatable"),
+        ("human_impact", "Human Impact"),
+    )
+    checks: list[dict[str, str]] = []
+    for key, label in point_names:
+        point = ssvc.get(key) or {}
+        confidence = point.get("confidence", "low")
+        status = "confirmed" if confidence == "high" else "attention"
+        evidence = "; ".join(point.get("evidence") or [])
+        checks.append({
+            "label": label,
+            "status": status,
+            "value": (
+                f"{point.get('label', 'Unknown')} · {evidence or 'evidence missing'} "
+                f"({confidence} confidence)"
+            ),
+        })
     has_fix = bool(finding.package.fixed_version)
-    return [
-        {"label": "Known exploitation", "status": kev_status,
-         "value": kev_value},
-        {"label": "Exploit likelihood", "status": epss_status,
-         "value": epss_value},
-        {"label": "Operational exposure", "status": context_status,
-         "value": context_value},
-        {"label": "Impact", "status": impact_status,
-         "value": impact_value},
+    checks.append(
         {"label": "Fix readiness", "status": "confirmed" if has_fix else "attention",
          "value": (f"Fixed version {finding.package.fixed_version} is available"
-                   if has_fix else "No fixed version supplied; mitigate or investigate")},
-    ]
+                   if has_fix else "No fixed version supplied; mitigate or investigate")}
+    )
+    return checks
 
 
 def priority_basis(finding: Finding) -> str:
-    """Explain the strongest deterministic reason for the assigned priority."""
+    """Explain the deterministic SSVC path behind the assigned priority."""
     triage = finding.triage or {}
-    priority = triage.get("priority", "P4")
-    enrichment = finding.enrichment
-    epss = enrichment.epss_score or 0.0
-    contextual = any((
-        finding.asset.internet_exposed is True,
-        finding.asset.reachable is True,
-        finding.asset.runtime_observed is True,
-    ))
-    score = enrichment.nvd_cvss_score or finding.cvss_score or 0.0
-
-    if priority == "P1" and enrichment.in_cisa_kev:
-        return "P1 because CISA KEV confirms this vulnerability is exploited in the wild."
-    if priority == "P1" and epss >= 0.5 and contextual:
+    ssvc = triage.get("ssvc") or {}
+    if ssvc.get("decision_path"):
         return (
-            f"P1 because EPSS is {epss * 100:.1f}% and the asset has positive "
-            "exposure or runtime evidence."
+            "The SSVC Deployer path "
+            f"{ssvc['decision_path']} results in {ssvc.get('decision_label', 'this decision')}."
         )
-    if priority == "P2" and epss >= 0.1:
-        return f"P2 because EPSS is {epss * 100:.1f}%, above the 10% escalation threshold."
-    if priority == "P2" and score >= 9.0 and contextual:
-        return "P2 because critical impact is combined with exposure or runtime relevance."
-    if priority == "P3" and score >= 7.0:
-        return f"P3 because CVSS {score:g} indicates high impact without a stronger P1/P2 trigger."
     return (
-        f"{priority} reflects the loaded exploitation, impact, and asset-context "
-        "signals; the checklist below shows each input."
+        "This result is missing its SSVC decision path; rerun triage before relying "
+        "on this recommendation."
     )
 
 
@@ -166,8 +106,8 @@ def evaluation_outcome(row: EvalRow, total_findings: int) -> dict[str, float | i
     review_reduction = (
         (1 - reviewed / total_findings) * 100 if total_findings else 0.0
     )
-    patchtriage_coverage = (
-        row.kev_patchtriage / row.kev_total * 100 if row.kev_total else 0.0
+    ssvc_coverage = (
+        row.kev_ssvc / row.kev_total * 100 if row.kev_total else 0.0
     )
     cvss_coverage = (
         row.kev_baseline / row.kev_total * 100 if row.kev_total else 0.0
@@ -175,11 +115,14 @@ def evaluation_outcome(row: EvalRow, total_findings: int) -> dict[str, float | i
     return {
         "reviewed": reviewed,
         "review_reduction_pct": round(review_reduction, 1),
-        "kev_coverage_pct": round(patchtriage_coverage, 1),
-        "kev_gain_points": round(patchtriage_coverage - cvss_coverage, 1),
-        "additional_kev_vs_cvss": row.kev_patchtriage - row.kev_baseline,
+        "kev_coverage_pct": round(ssvc_coverage, 1),
+        "kev_gain_points": round(ssvc_coverage - cvss_coverage, 1),
+        "additional_kev_vs_cvss": row.kev_ssvc - row.kev_baseline,
         "kev_lift_vs_cvss": (
-            round(row.kev_patchtriage / row.kev_baseline, 1)
+            round(row.kev_ssvc / row.kev_baseline, 1)
             if row.kev_baseline else None
         ),
+        "urgent_coverage_pct": round(
+            row.urgent_ssvc / row.urgent_total * 100, 1
+        ) if row.urgent_total else 0.0,
     }

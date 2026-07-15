@@ -61,6 +61,8 @@ def test_config_lists_rules_backend(server):
     assert cfg["backends"] == ["rules"]
     assert cfg["has_key"] is False
     assert "offline-demo" in cfg["capabilities"]
+    assert "ssvc-deployer" in cfg["capabilities"]
+    assert "kev-baseline" in cfg["capabilities"]
     assert "vendor-advisories" in cfg["capabilities"]
     assert cfg["connectors"] == {
         "msrc": "public", "rhsa": "public", "usn": "public",
@@ -72,11 +74,18 @@ def test_add_and_delete_target(server):
     status, t = _req("POST", server + "/api/targets",
                      {"name": "checkout", "url": "https://example.com",
                       "criticality": "critical", "internet_exposed": True,
+                      "system_exposure": "open", "automatable": "yes",
+                      "mission_impact": "mef_failure",
+                      "safety_impact": "marginal",
                       "reachable": True, "runtime_observed": True,
                       "context_sources": ["otel"]})
     assert status == 201
     assert t["name"] == "checkout" and t["url"] == "https://example.com"
     assert t["reachable"] is True and t["runtime_observed"] is True
+    assert t["system_exposure"] == "open"
+    assert t["automatable"] == "yes"
+    assert t["mission_impact"] == "mef_failure"
+    assert t["safety_impact"] == "marginal"
     assert t["context_sources"] == ["otel"]
     _, targets = _req("GET", server + "/api/targets")
     assert len(targets) == 1
@@ -112,8 +121,36 @@ def test_security_headers_are_present(server):
         assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
     assert "Run the offline demo" in page
     assert "Patch what matters" in page
-    assert "97.9% less review noise" in page
-    assert "P1 · Patch Immediately" in page
+    assert "Severity informs. Your environment decides." in page
+    assert "Immediate decisions" in page
+    assert "Black Hat" not in page
+    assert "Arsenal" not in page
+    assert "LOCAL DECISION ENGINE" not in page
+    assert "v0.6.0" not in page
+    assert all(code not in page for code in ("P1", "P2", "P3", "P4"))
+
+
+def test_updates_and_validates_ssvc_context(server):
+    _, target = _req("POST", server + "/api/targets", {"name": "context"})
+    status, updated = _req(
+        "POST", server + f"/api/targets/{target['id']}/context",
+        {"system_exposure": "controlled", "automatable": "no",
+         "mission_impact": "mef_support_crippled",
+         "safety_impact": "critical", "context_sources": ["CMDB"]},
+    )
+    assert status == 200
+    assert updated["system_exposure"] == "controlled"
+    assert updated["automatable"] == "no"
+    assert updated["mission_impact"] == "mef_support_crippled"
+    assert updated["safety_impact"] == "critical"
+    assert updated["context_sources"] == ["CMDB"]
+
+    status, response = _req(
+        "POST", server + f"/api/targets/{target['id']}/context",
+        {"system_exposure": "internet-ish"},
+    )
+    assert status == 400
+    assert "system_exposure" in response["error"]
 
 
 def test_reject_non_scan_non_sbom(server):
@@ -142,7 +179,7 @@ def test_source_detects_sbom_format(server):
     assert resp["format"] == "spdx"
 
 
-def test_offline_arsenal_demo_runs_end_to_end(server):
+def test_offline_demo_runs_end_to_end(server):
     status, target = _req("POST", server + "/api/demo", {})
     assert status == 201
     assert target["demo"] is True
@@ -156,7 +193,8 @@ def test_offline_arsenal_demo_runs_end_to_end(server):
     assert summary["vendor_advisories"] == 0
     assert summary["vendor_sources"] == []
     assert summary["comparison"]["kev"] == {
-        "cvss": 0, "epss": 1, "patchtriage": 1,
+        "cvss": 0, "epss": 1, "kev": 1, "ssvc": 1,
+        "patchtriage": 1,
     }
     assert summary["comparison"]["outcome"] == {
         "reviewed": 1,
@@ -165,15 +203,29 @@ def test_offline_arsenal_demo_runs_end_to_end(server):
         "kev_gain_points": 100.0,
         "additional_kev_vs_cvss": 1,
         "kev_lift_vs_cvss": None,
+        "urgent_coverage_pct": 100.0,
     }
-    assert summary["top_priority_label"] == "Patch Immediately"
+    assert summary["comparison"]["urgent"] == {
+        "total": 1, "cvss": 0, "epss": 1, "kev": 1, "ssvc": 1,
+    }
+    assert summary["outcomes"] == {
+        "immediate": 1, "out_of_cycle": 0, "scheduled": 2, "defer": 0,
+    }
+    assert summary["top_ssvc_decision"] == "Immediate"
+    assert summary["ssvc_confirmation_fields"] == []
     assert summary["top_deadline_days"] == 3
-    assert summary["explanation"]["priority_label"] == "Patch Immediately"
+    assert summary["explanation"]["outcome_label"] == "Immediate"
     assert summary["explanation"]["basis"].startswith(
-        "P1 because CISA KEV confirms"
+        "The SSVC Deployer path"
     )
+    assert summary["evaluated_context"] == {
+        "system_exposure": "open", "automatable": "yes",
+        "mission_impact": "mef_failure", "safety_impact": "critical",
+        "context_sources": ["OpenTelemetry", "Falco"],
+    }
+    assert summary["explanation"]["ssvc"]["decision"] == "immediate"
     assert summary["explanation"]["checks"][0]["status"] == "confirmed"
-    assert summary["explanation"]["factors"]["runtime_observed"] is True
+    assert summary["explanation"]["ssvc"]["supplemental"]["runtime_observed"] is True
     assert summary["duration_ms"] >= 0
     status, same_target = _req("POST", server + "/api/demo", {})
     assert status == 200

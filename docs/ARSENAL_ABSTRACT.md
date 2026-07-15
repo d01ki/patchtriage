@@ -1,8 +1,9 @@
 # Black Hat Arsenal Submission Draft
 
-> Benchmark numbers below are from `benchmarks/out/BENCHMARKS.md`
-> (2026-07-11 run, pinned targets; reproduce with
-> `./benchmarks/run_benchmark.sh`).
+> The 2026-07-11 benchmark used the former signal-weighted ordering. It is
+> retained as historical evidence, not as a performance claim for the current
+> SSVC implementation. Re-run `./benchmarks/run_benchmark.sh` before using
+> current numbers in a submission.
 
 ## Tool name
 
@@ -14,71 +15,59 @@ Vulnerability Assessment / Defense / AI-ML Security
 
 ## Short description (one line)
 
-Auditable AI triage for the vulnerability flood: deterministic exploitation
-signals in, analyst-grade decisions out — every one machine-verified.
+Environment-specific vulnerability decisions: official SSVC Deployer outcomes,
+authoritative threat evidence, and optional AI explanations — all auditable.
 
 ## Abstract
 
 Frontier AI has industrialized vulnerability discovery. Scanners, fuzzers and
 LLM-assisted auditing now produce findings far faster than any team can patch,
 and the bottleneck has quietly moved from *finding* vulnerabilities to
-*deciding what to fix first*. The industry's default answer — sort by CVSS —
-is measurably wrong. We benchmarked against 11 pinned images of the software
-enterprises actually self-host internally — Jenkins, Nextcloud, Redmine,
-Nexus, GitLab-style git servers, Grafana, SonarQube, Mattermost, WordPress —
-not base images or frameworks. Across them, **87 findings are on the CISA
-Known-Exploited-Vulnerabilities list, and CVSS-descending ordering placed
-just 1 of them inside a realistic weekly patch budget of 50 findings per
-system — missing 99% of what attackers are actively using**. PatchTriage's
-signal-based ordering caught 84 of 87 (97%) with the same budget, and
-captured 2.6x more exploitation-probability mass (FIRST EPSS) overall.
-Doubling the budget does not rescue CVSS-sorting — it stays at 1 of 87 —
-because known-exploited CVEs rarely carry the top CVSS score and stay buried
-under hundreds of higher-scored "criticals." (A second run over 18
-end-of-life OS/runtime images reproduces the effect: 1 of 118 KEV vs 99.)
+*deciding what to fix first in this environment*. CVSS describes technical
+severity, KEV records observed exploitation, and EPSS estimates future
+exploitation probability; none alone answers whether this deployed instance
+should be handled now, out-of-cycle, in normal maintenance, or deferred.
+PatchTriage implements the official CERT/CC SSVC Deployer decision table and
+combines Exploitation, System Exposure, Automatable, and Human Impact into
+those four action-timing outcomes.
 
 The obvious fix — "let an LLM prioritize" — introduces a new problem: how do
-you trust an AI's risk decisions? PatchTriage's answer is an architecture we
-call *auditable AI triage*. The LLM is never allowed to produce a number.
-All quantitative signals are fetched deterministically from authoritative
-sources (FIRST EPSS, CISA KEV, NVD) and cached locally; the model receives
-those signals plus organizational context (asset criticality, internet
-exposure) and returns only structured decisions with rationales. A separate
-audit layer then machine-verifies every decision against the signals it was
-given: fabricated numbers, downgraded known-exploited findings, patch actions
-without an available fix, and silent divergence from a deterministic baseline
-are all flagged for human review. You get frontier-model reasoning with
-none of the hallucinated risk scores.
+you trust an AI's risk decisions? PatchTriage does not ask you to. The LLM is
+never allowed to produce a score or override priority. Authoritative evidence
+(FIRST EPSS, CISA KEV, NVD and vendor advisories) and declared environment
+context feed a deterministic SSVC path. Optional AI adds only explanations,
+remediation steps, and uncertainty notes. A separate audit layer recomputes
+SSVC and flags any changed priority, action, deadline, decision input,
+fabricated number, or patch-without-fix recommendation.
 
 The same audit layer powers a cost architecture that makes frontier triage
 affordable at estate scale: a *cascade* mode screens every finding with a
-fast model and escalates only findings that are high-signal (CISA KEV, high
-EPSS, exposed critical assets) or whose screening decision fails the machine
-audit to the frontier model — with the routing decision itself recorded and
+fast model and escalates only urgent SSVC outcomes, context that needs human
+confirmation, or explanations that fail the machine audit to the frontier
+model — with the routing decision itself recorded and
 auditable. Bulk overnight re-triage runs at 50% API cost via batch
 processing, and failed API calls degrade gracefully to the deterministic
 baseline, tagged, so a network blip never aborts a 2,000-finding run.
 
 PatchTriage ingests Trivy, Grype and osv-scanner output, deduplicates findings
 across scanners via an alias graph, groups them into concrete remediation
-actions ranked by risk actually removed, and emits a self-contained HTML
-situation report. A built-in evaluation compares its ordering against
-CVSS-sorting on every run, using third-party ground truth — the tool cannot
-grade its own homework. Fully open source (Apache-2.0), Python, runs
+actions ordered by SSVC action timing, and emits a self-contained HTML
+situation report. A built-in evaluation compares CVSS, EPSS, KEV-first, and
+SSVC orderings on every run and distinguishes independent KEV coverage from
+SSVC context-consistency. Fully open source (Apache-2.0), Python, runs
 air-gapped, demo in 60 seconds with no API keys.
 
 ## What's new / why Arsenal
 
-* First open-source triage pipeline built around **machine-verified LLM
-  decisions** — signals and reasoning are architecturally separated, and the
-  audit trail is a first-class output.
+* Standards-first decision support built around the **CERT/CC SSVC Deployer
+  model** — the full decision path, input confidence, and provenance are
+  first-class output.
 * **Audit-driven model cascade**: the verification layer doubles as the
   escalation router, so frontier-model spend concentrates exactly where
   triage mistakes are expensive.
-* Honest-by-construction evaluation (KEV@k / EPSS@k vs CVSS baseline)
-  computed on every run and reproducible on public targets — the benchmark
-  needs nothing but Docker (scanners fall back to pinned container images).
-* Pluggable everything: scanners in, triage backends (deterministic rules,
+* Four-way evaluation (CVSS / EPSS / KEV-first / SSVC) computed on every run,
+  with external evidence and context-consistency labeled separately.
+* Pluggable everything: scanners in, triage backends (deterministic SSVC,
   single-model Claude, or cascade), reports out. Runs in CI, offline, single
   pip install or `docker compose run demo`.
 
@@ -91,7 +80,8 @@ air-gapped, demo in 60 seconds with no API keys.
 4. Flip `--triage cascade`: same signals, analyst-grade rationales — watch
    the audit layer route findings between the screening and frontier models,
    then catch a deliberately-injected fabricated score.
-5. The HTML situation report: remediation ledger ranked by risk removed.
+5. The HTML situation report: official SSVC path, confirmation checklist, and
+   remediation ledger ordered by action timing.
 
 ## Requirements
 

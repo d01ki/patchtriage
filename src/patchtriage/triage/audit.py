@@ -7,13 +7,11 @@ fabricate, and you don't have to trust it — you can verify it.
 Checks per finding:
   fabricated_numbers   decimal values cited in the rationale must correspond
                        to real signals (EPSS, CVSS) within tolerance
-  kev_respected        a known-exploited (CISA KEV) finding must be P1/P2
+  ssvc_consistency     priority and outcome must match the deterministic SSVC
+                       Deployer decision table
   fix_consistency      "patch_*" actions require an available fixed version;
                        "mitigate" is for findings without one
-  baseline_divergence  decision is compared with the deterministic rules
-                       baseline; a jump of 2+ priority levels is flagged for
-                       human review (divergence is allowed — silent divergence
-                       is not)
+  evidence_completeness the SSVC path and confidence provenance must be present
 
 The result is attached to finding.triage["audit"] and surfaced in the CLI
 summary and the HTML report.
@@ -26,7 +24,6 @@ import re
 from ..models import Finding
 from .engine import RulesBackend
 
-_PRIORITY_RANK = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
 _DECIMAL = re.compile(r"\d+\.\d+")
 
 
@@ -51,8 +48,6 @@ def _strip_known_tokens(f: Finding, text: str) -> str:
 def audit_finding(f: Finding, rules: RulesBackend) -> dict:
     t = f.triage or {}
     flags: list[str] = []
-    e = f.enrichment
-
     # 1. fabricated numbers
     rationale = _strip_known_tokens(f, t.get("rationale", ""))
     signals = _signal_values(f)
@@ -63,32 +58,62 @@ def audit_finding(f: Finding, rules: RulesBackend) -> dict:
         if not any(abs(v - s) <= 0.051 for s in signals):
             flags.append(f"fabricated_number:{v}")
 
-    # 2. KEV respected
-    if e.in_cisa_kev and _PRIORITY_RANK.get(t.get("priority", "P4"), 9) > 1:
-        flags.append("kev_downgraded")
+    # 2. deterministic SSVC decision respected. KEV is an input to
+    # Exploitation=Active, not a shortcut that bypasses stakeholder context.
+    baseline = rules.triage(f)
+    if t.get("priority") != baseline["priority"]:
+        flags.append(
+            f"ssvc_priority_mismatch:{baseline['priority']}->{t.get('priority')}")
+    if t.get("action") != baseline["action"]:
+        flags.append(
+            f"ssvc_action_mismatch:{baseline['action']}->{t.get('action')}")
+    if t.get("suggested_deadline_days") != baseline["suggested_deadline_days"]:
+        flags.append(
+            "ssvc_deadline_mismatch:"
+            f"{baseline['suggested_deadline_days']}->"
+            f"{t.get('suggested_deadline_days')}")
+    actual_ssvc = t.get("ssvc")
+    expected_ssvc = baseline["ssvc"]
+    if not isinstance(actual_ssvc, dict):
+        flags.append("ssvc_missing")
+    else:
+        if actual_ssvc.get("model") != expected_ssvc["model"]:
+            flags.append("ssvc_model_mismatch")
+        if actual_ssvc.get("decision") != expected_ssvc["decision"]:
+            flags.append(
+                "ssvc_decision_mismatch:"
+                f"{expected_ssvc['decision']}->{actual_ssvc.get('decision')}")
+        if actual_ssvc.get("decision_path") != expected_ssvc["decision_path"]:
+            flags.append("ssvc_path_mismatch")
+        for key in (
+            "exploitation", "system_exposure", "automatable",
+            "mission_impact", "safety_impact", "human_impact",
+        ):
+            actual_point = actual_ssvc.get(key)
+            expected_point = expected_ssvc[key]
+            if not isinstance(actual_point, dict):
+                flags.append(f"ssvc_evidence_missing:{key}")
+                continue
+            if actual_point.get("value") != expected_point["value"]:
+                flags.append(f"ssvc_input_mismatch:{key}")
+            if not actual_point.get("source") or not actual_point.get("confidence"):
+                flags.append(f"ssvc_evidence_missing:{key}")
 
     # 3. fix consistency
     action = t.get("action", "")
     has_fix = bool(f.package.fixed_version)
     if action.startswith("patch") and not has_fix:
         flags.append("patch_without_fix")
-    if action == "mitigate" and has_fix and e.in_cisa_kev:
-        flags.append("mitigate_despite_fix_on_kev")
-
-    # 4. divergence from deterministic baseline (allowed, but never silent)
-    baseline = rules.triage(f)
-    div = abs(_PRIORITY_RANK.get(t.get("priority", "P4"), 3)
-              - _PRIORITY_RANK[baseline["priority"]])
-    if div >= 2:
-        flags.append(f"baseline_divergence:{baseline['priority']}"
-                     f"->{t.get('priority')}")
+    if action == "mitigate" and has_fix and t.get("priority") in ("P1", "P2"):
+        flags.append("mitigate_despite_available_fix")
 
     return {
         "verified": not flags,
         "flags": flags,
         "baseline_priority": baseline["priority"],
-        "checks": ["fabricated_numbers", "kev_respected",
-                   "fix_consistency", "baseline_divergence"],
+        "ssvc_decision": expected_ssvc["decision"],
+        "checks": ["fabricated_numbers", "ssvc_consistency",
+                   "fix_consistency", "evidence_completeness"],
     }
 
 

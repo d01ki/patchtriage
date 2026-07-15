@@ -11,14 +11,14 @@ than any team can patch them. The bottleneck has moved from *finding*
 vulnerabilities to *deciding what to fix first*. PatchTriage ingests raw
 scanner output, deduplicates findings across tools, enriches them with
 authoritative exploitation signals (EPSS, CISA KEV, NVD) and official vendor
-advisories (Microsoft, Red Hat, Ubuntu, Debian, GitHub), and then applies an
-analyst-grade reasoning layer — either deterministic rules or a frontier LLM —
-to produce a defensible, prioritized patch plan.
+advisories (Microsoft, Red Hat, Ubuntu, Debian, GitHub), then applies the
+deterministic [CERT/CC SSVC Deployer model](https://certcc.github.io/SSVC/howto/deployer_tree/)
+to produce an environment-specific, defensible patch plan.
 
-**Design principle: the LLM never invents numbers.** All scores and
-exploitation data come deterministically from authoritative sources. The AI
-layer only *reasons over* those signals, the way a human analyst would, and
-returns structured, auditable decisions.
+**Design principle: the LLM never decides priority or invents numbers.** All
+signals come from authoritative sources or declared asset context. The SSVC
+decision tree fixes the priority; optional AI only improves explanations,
+remediation steps, and uncertainty notes.
 
 ![PatchTriage demo](docs/demo.gif)
 
@@ -81,8 +81,8 @@ runs air-gapped.
 
 ```
  1. scan (tools you already run)        2. describe your environment once
-    trivy image --format json ...          assets.yaml  (glob -> criticality,
-    grype <image> -o json ...                            internet exposure)
+    trivy image --format json ...          assets.yaml  (glob -> SSVC exposure,
+    grype <image> -o json ...                            mission/safety impact)
     osv-scanner --format json ...
                     \                          /
                      v                        v
@@ -90,23 +90,23 @@ runs air-gapped.
                      |
                      v
  4. work the plan top-down: each row = one concrete change (e.g. "Upgrade
-    libc6 to 2.36-9+deb12u3 on web-frontend"), ranked by risk actually removed
- 5. (optional) --triage claude for analyst-grade rationales per finding
+    libc6 to 2.36-9+deb12u3 on web-frontend"), ranked by SSVC action timing
+ 5. (optional) --triage claude for analyst-grade explanations per finding
  6. re-scan after patching; re-run; the report shows what burned down
 ```
 
 ## Proving practicality: the built-in evaluation
 
-Every run ends with an honesty check. For the same findings and a fixed work
-budget k ("you only have time to fix k things this week"), three orderings are
-compared: the industry default (CVSS descending), the strongest simple
-alternative (EPSS descending), and PatchTriage's. Metrics
-come from third-party ground truth — CISA KEV membership and FIRST EPSS
-probability — so the tool cannot grade its own homework. From the demo:
+Every run ends with an outcome check. For the same findings and a fixed work
+budget k, four orderings are compared: CVSS, EPSS, KEV-first, and SSVC.
+CISA KEV coverage is independent observed-exploitation evidence. “SSVC
+urgent” coverage shows whether the queue preserves this inventory's Immediate
+and Out-of-Cycle decisions; it is a context-consistency measure, not external
+ground truth. From the demo:
 
-| Budget | KEV — CVSS | KEV — EPSS | KEV — PatchTriage | EPSS mass — CVSS | EPSS mass — EPSS | EPSS mass — PatchTriage |
-|--------|------------|------------|-------------------|------------------|------------------|-------------------------|
-| top 1  | 0/1        | **1/1**    | **1/1**           | 0.372            | **0.856**        | **0.856**               |
+| Budget | KEV · CVSS | KEV · EPSS | KEV · KEV-first | KEV · SSVC | Urgent · CVSS | Urgent · SSVC |
+|---|---:|---:|---:|---:|---:|---:|
+| top 1 | 0/1 | 1/1 | 1/1 | 1/1 | 0/1 | 1/1 |
 
 With a budget of one fix, CVSS-sorting spends it on the flashy 10.0 while the
 vulnerability being exploited in ransomware campaigns waits. PatchTriage
@@ -117,11 +117,11 @@ evaluation on your own scans — it is printed on every `run`.
 
 Run the bundled demo and you'll see it immediately:
 
-| Pri | CVE | Package | CVSS | EPSS | KEV | Decision |
-|-----|-----|---------|------|------|-----|----------|
-| **P1** | CVE-2023-4911 | libc6 | 7.8 | 0.856 | **YES (ransomware)** | patch_now |
-| P2 | CVE-2024-3094 | xz-utils | **10.0** | 0.372 | – | patch_scheduled |
-| P3 | CVE-2021-23337 | lodash | 7.2 | 0.018 | – | patch_scheduled |
+| SSVC outcome | CVE | Package | CVSS | EPSS | KEV | Decision |
+|---|-----|---------|------|------|-----|----------|
+| **Immediate** | CVE-2023-4911 | libc6 | 7.8 | 0.856 | **YES (ransomware)** | patch_immediately |
+| Scheduled | CVE-2024-3094 | xz-utils | **10.0** | 0.372 | — | patch_scheduled |
+| Scheduled | CVE-2021-23337 | lodash | 7.2 | 0.018 | – | patch_scheduled |
 
 Sorting by CVSS would put the 10.0 first. PatchTriage puts the
 actively-exploited 7.8 first — because that is what is actually being used
@@ -160,28 +160,26 @@ against you in the wild.
   not abort triage. No API keys are required (NVD/GitHub keys raise rate
   limits). Vendor presence is evidence, not an automatic risk-score boost.
 * **Layer 4 — Context** (`context.py`): a small `assets.yaml` inventory
-  (glob rules) teaches the tool which assets are business-critical,
-  internet-exposed, statically reachable, or observed at runtime by eBPF,
-  Falco, or OpenTelemetry. Positive reachability/runtime evidence increases
-  confidence; missing telemetry never suppresses risk. The same CVE on an
-  active checkout path and an unknown internal batch box should not rank the
-  same.
+  records SSVC System Exposure, Automatable, Mission Impact, and Safety
+  Impact, plus reachability/runtime evidence. Missing SSVC context uses the
+  standard's conservative default and is visibly marked for confirmation;
+  it never silently lowers priority.
 * **Layer 5 — Triage** (`triage/engine.py`): pluggable backends behind one
   interface.
-  * `rules` — deterministic baseline (KEV or high-EPSS-and-exposed ⇒ P1, …).
-    Runs anywhere, no keys, ideal for CI.
+  * `rules` — backwards-compatible CLI name for the deterministic SSVC
+    Deployer backend. Runs anywhere, no keys, ideal for CI.
   * `claude` — sends each enriched finding to the Anthropic API
     (default `claude-opus-4-8`), with structured output enforced through
-    strict tool use. The model receives the deterministic signals and returns
-    `{priority, action, rationale, suggested_deadline_days}`. Calls run in
+    strict tool use. The model receives the already-final SSVC result and
+    returns explanation/remediation fields only. Calls run in
     parallel (`--jobs`), and any finding whose API call fails degrades
-    gracefully to the rules baseline (tagged `rules_fallback` in the report)
+    gracefully to the deterministic SSVC baseline (tagged `rules_fallback` in the report)
     — a network blip never aborts a 2,000-finding run.
   * `cascade` — a two-tier agent pipeline. A fast screening model
     (default `claude-haiku-4-5`) triages every finding; a finding is
     escalated to the frontier model (default `claude-opus-4-8`) only when it
-    is **high-signal** (CISA KEV, EPSS ≥ 0.1, or on an internet-exposed
-    critical asset) or when its screening decision **fails the machine
+    has an urgent SSVC outcome, requires context confirmation, or when its
+    screening explanation **fails the machine
     audit**. Frontier reasoning exactly where mistakes are expensive,
     screening-tier cost everywhere else — and every routing decision is
     recorded (`escalated`, `escalation_reasons`) so the cascade itself is
@@ -204,11 +202,11 @@ patchtriage serve            # opens http://127.0.0.1:8765 in your browser
 ```
 
 Register each internal system as a **target** (name, a **link URL** to its
-dashboard/repo/runbook, business criticality, internet exposure, reachability,
-and runtime observations), attach a scan or an SBOM per target, and hit
+dashboard/repo/runbook, SSVC exposure, mission/safety impact, automatable
+spread, reachability, and runtime observations), attach a scan or an SBOM per target, and hit
 **Run all**. You get a per-target decision board with the leading package
-action, CVSS-vs-EPSS-vs-PatchTriage comparison, deterministic risk-factor
-chain, priority counts, KEV count, and audit status. Every target name links
+action, CVSS-vs-EPSS-vs-KEV-vs-SSVC comparison, deterministic SSVC decision
+path, confidence/confirmation status, priority counts, KEV count, and audit status. Every target name links
 back to the real system, and every result opens its self-contained HTML report.
 
 For a talk or review, click **Run the offline demo**: bundled Trivy evidence
@@ -218,7 +216,7 @@ touches the real enrichment cache.
 
 Built for estates with many systems; the registry persists under
 `~/.config/patchtriage`. Standard-library only (no web framework), binds to
-localhost by default, and applies the same context-aware risk model as the CLI.
+localhost by default, and applies the same SSVC decision model as the CLI.
 
 ```bash
 docker compose up gui        # same console in a container -> http://localhost:8765
@@ -268,6 +266,10 @@ The format is auto-detected. OSV responses are cached, so re-runs are cheap.
 ```bash
 # Deterministic triage of one or more scanner outputs
 patchtriage run trivy.json grype.json --exposed --criticality high -o report.json
+
+# Prefer explicit SSVC Deployer context for production decisions
+patchtriage run trivy.json --ssvc-exposure open --ssvc-automatable yes \
+  --ssvc-mission-impact mef_failure --ssvc-safety-impact marginal
 
 # Skip NVD for speed (EPSS + KEV only)
 patchtriage run trivy.json --no-nvd
@@ -356,10 +358,13 @@ osv-scanner --format json -r ./repo > osv.json
                  "vendor_advisories": [{"source": "debian",
                    "advisory_id": "CVE-2023-4911",
                    "url": "https://security-tracker.debian.org/tracker/CVE-2023-4911"}]},
-  "triage": {"priority": "P1", "action": "patch_now",
+  "triage": {"action": "patch_immediately",
              "suggested_deadline_days": 3,
-             "rationale": "Actively exploited (KEV, ransomware) with a fix
-                           available on an internet-exposed asset."}
+             "rationale": "SSVC Active / Open / Yes / High results in Immediate.",
+             "ssvc": {"model": "ssvc:DT_DP:1.0.0",
+                      "decision_label": "Immediate",
+                      "decision_path": "Active → Open → Yes → High → Immediate",
+                      "needs_confirmation": []}}
 }
 ```
 
@@ -368,27 +373,19 @@ so every decision is auditable against the signals it was made from.
 
 ## Auditability, planning and reporting
 
-* **Audit** (`triage/audit.py`): every AI decision is machine-verified
-  against the deterministic signals it was given. Four checks run on every
-  finding: no fabricated numbers in the rationale (cited decimals must match
-  real EPSS/CVSS values), known-exploited findings cannot be silently
-  downgraded, patch actions require an available fix, and any 2+ level
-  divergence from the deterministic baseline is flagged for human review.
-  Divergence is allowed — the model may out-reason the rules — but silent
-  divergence is not. Verified decisions get a ✓ in the report; flagged ones
-  get a ⚑ with the reason.
-* **Layer 6 — Plan** (`plan.py`): findings are the wrong unit of work —
-  nobody patches one CVE at a time. Findings are grouped into concrete
-  actions ("Upgrade libc6 to X on host Y") and ranked by **risk reduced per
-  action** using an explainable model: likelihood (KEV=1.0, else EPSS) x
-  impact (CVSS/10) x asset weight (criticality, exposure, positive
-  reachability/runtime evidence).
+* **Audit** (`triage/audit.py`): every decision is machine-verified against a
+  fresh deterministic SSVC assessment. An outcome/action/deadline mismatch,
+  fabricated numbers in AI prose, or a patch action without a supplied fix is
+  flagged. The LLM cannot override the SSVC outcome.
+* **Layer 6 — Plan** (`plan.py`): findings are grouped into concrete actions
+  ("Upgrade libc6 to X on host Y") and ordered by SSVC outcome. No proprietary
+  arithmetic score competes with or modifies the official decision path.
 * **Layer 7 — Report** (`report/html.py`): one self-contained HTML file —
   priority spine, explainability graph, remediation ledger with risk-reduction
   bars, evaluation table, full findings with rationales. No CDN, opens offline,
   safe to attach to a ticket or email.
-* **Evaluation** (`evalcmp.py`): the CVSS-vs-EPSS-vs-PatchTriage comparison
-  described above, computed on every run.
+* **Evaluation** (`evalcmp.py`): the CVSS-vs-EPSS-vs-KEV-first-vs-SSVC
+  comparison described above, computed on every run.
 
 ## What PatchTriage does NOT do
 
@@ -400,7 +397,29 @@ so every decision is auditable against the signals it was made from.
   decision layer on top.
 * It does not let the LLM produce scores. Ever.
 
-## Benchmark: PatchTriage catches 97% of what's being exploited; CVSS-sorting catches 1%
+## Reviewer verification (current implementation)
+
+Run the current proof completely offline, with no API keys:
+
+```bash
+patchtriage verify --repeats 100 --output verification_report.json
+```
+
+This verifies all 72 official SSVC Deployer paths, all 16 official Human
+Impact combinations, GUI target-context mapping, same-CVE target sensitivity,
+unknown-context warnings, repeated deterministic agreement, a frozen
+end-to-end pipeline, and decision-tamper detection. The JSON report includes
+SHA-256 input and decision fingerprints so a reviewer can rerun the exact
+evidence. See [docs/VALIDATION.md](docs/VALIDATION.md) for the claim boundary
+and jury protocol.
+
+## Historical pre-SSVC benchmark (not a current SSVC performance claim)
+
+> The results below were produced on 2026-07-11 by the former signal-weighted
+> deterministic ordering. They remain for reproducibility, but must not be
+> presented as results of the current SSVC implementation. Re-run the benchmark
+> to generate current CVSS/EPSS/KEV-first/SSVC results for a declared context
+> profile.
 
 The result for an operator is a much smaller first-pass queue without losing
 the vulnerabilities attackers are already using:
@@ -454,11 +473,9 @@ and still only 1/87 at 50/system** — while PatchTriage went 63→84. Ground
 truth is third-party (CISA KEV, FIRST EPSS), so the tool cannot grade its own
 homework.
 
-This benchmark runs the **deterministic** backend (`--triage rules`), so the
-97% comes purely from signal-based prioritization — no LLM, fully
-reproducible, nothing to hallucinate. The `claude` / `cascade` AI backends
-sit on top of the *same* signals and add analyst-grade rationales per finding
-(every one machine-audited); they change the explanations, not the numbers.
+This archived benchmark ran the former deterministic backend. Current runs
+use the official SSVC Deployer tree; the `claude` / `cascade` AI backends add
+analyst-grade explanations but cannot change the SSVC action timing.
 
 The effect reproduces on other target sets — 18 end-of-life OS/runtime images
 (`targets_eol.txt`) give **1/118 vs 99/118**
@@ -483,7 +500,6 @@ Docker alone reproduces the numbers. `SCANNERS=trivy` roughly halves runtime;
 
 * Automatic reachability collectors (manual inventory and runtime evidence are
   already supported)
-* Vendor advisory connectors (Microsoft MSRC, RHSA, USN, Debian, GHSA)
 * Exploit intelligence connectors (Metasploit and public PoC provenance)
 * Ecosystem-aware version comparison for multi-fix packages
 * Ticketing integrations (GitHub Issues / Jira)

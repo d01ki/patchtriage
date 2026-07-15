@@ -1,5 +1,8 @@
 # PatchTriage benchmark results
 
+> Historical pre-SSVC result. This used the former signal-weighted ordering
+> and must not be presented as a benchmark of the current SSVC implementation.
+
 Targets: pinned public container images. Budget k = 50 findings per system - what one team can realistically remediate in a week (one package upgrade usually closes many findings). Ground truth: CISA KEV membership and FIRST EPSS.
 
 ## User outcomes

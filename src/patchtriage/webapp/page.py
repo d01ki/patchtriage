@@ -4,13 +4,13 @@ INDEX_HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#0a0d14">
-<title>PatchTriage — Decision Engine</title>
+<title>PatchTriage</title>
 <style>
   :root{
     --void:#090c12;--void2:#10141e;--panel:#151a25;--panel2:#1b2130;
     --ink:#f4f6fb;--muted:#929cad;--line:#2a3243;--hot:#ff4d3d;
     --amber:#ffb020;--blue:#6e8cff;--cyan:#49d6e9;--paper:#eef1f7;
-    --dark:#171b25;--p1:#ff4d3d;--p2:#ffb020;--p3:#6e8cff;--p4:#778195;
+    --dark:#171b25;--immediate:#ff4d3d;--outofcycle:#ffb020;--scheduled:#6e8cff;--defer:#778195;
   }
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
@@ -25,7 +25,7 @@ INDEX_HTML = r"""<!doctype html>
   .brandmark{width:27px;height:27px;border:2px solid var(--hot);position:relative}
   .brandmark:before,.brandmark:after{content:"";position:absolute;background:var(--hot)}
   .brandmark:before{width:13px;height:2px;left:5px;top:7px}.brandmark:after{width:2px;height:13px;left:11px;top:5px}
-  .brand span{color:var(--hot)}.topmeta{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px}
+  .brand span{color:var(--hot)}
   .statusdot{width:7px;height:7px;border-radius:50%;background:var(--cyan);box-shadow:0 0 12px var(--cyan)}
   .hero{max-width:1500px;margin:0 auto;padding:clamp(46px,7vw,92px) clamp(20px,4vw,64px) 42px;
     display:grid;grid-template-columns:minmax(340px,.95fr) minmax(520px,1.2fr);gap:clamp(36px,6vw,90px);align-items:center}
@@ -48,7 +48,7 @@ INDEX_HTML = r"""<!doctype html>
   .nodecode{color:var(--cyan);font:700 11px "SFMono-Regular",Consolas,monospace}
   .arrow{display:flex;align-items:center;justify-content:center;color:#59667a;font-size:22px}
   .decision{grid-column:1/-1;margin-top:12px;border-left:3px solid var(--hot);background:#1c171c;padding:16px 18px;display:flex;justify-content:space-between;gap:20px;align-items:center}
-  .decision b{font-size:18px}.decision span{color:var(--muted);font-size:12px}.decision .p1{text-align:right;font:800 27px "SFMono-Regular",Consolas,monospace;color:var(--hot)}.decision .p1 small{display:block;color:#ffaaa3;font:700 10px/1.2 Inter,"Segoe UI",sans-serif;text-transform:uppercase;letter-spacing:.08em}
+  .decision b{font-size:18px}.decision span{color:var(--muted);font-size:12px}.decision .outcome-now{text-align:right;font:800 22px "SFMono-Regular",Consolas,monospace;color:var(--hot)}
   .benchmark{max-width:1500px;margin:0 auto 34px;padding:0 clamp(20px,4vw,64px);display:grid;grid-template-columns:minmax(300px,.9fr) minmax(520px,1.35fr);gap:1px}
   .benchmarkcopy{background:#111722;border:1px solid var(--line);padding:24px}.benchmarkcopy h2{font-size:clamp(23px,2.8vw,36px);line-height:1.08;letter-spacing:-.035em;margin:10px 0}.benchmarkcopy p{color:var(--muted);margin:0;font-size:12.5px}
   .outcomes{display:grid;grid-template-columns:repeat(3,1fr)}.outcome{background:var(--panel);border:1px solid var(--line);border-left:0;padding:20px 18px}.outcome strong{display:block;font:800 clamp(25px,3vw,38px) "SFMono-Regular",Consolas,monospace;color:var(--cyan)}.outcome span{display:block;font-size:12px;font-weight:700;margin:5px 0}.outcome small{display:block;color:var(--muted);font-size:10.5px}
@@ -59,12 +59,13 @@ INDEX_HTML = r"""<!doctype html>
   .workspaceinner{max-width:1500px;margin:0 auto;display:grid;grid-template-columns:340px minmax(0,1fr);gap:28px}
   .sectiontitle{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px}
   .sectiontitle h2{margin:0;font-size:18px;letter-spacing:-.02em}.sectiontitle span{font:11px "SFMono-Regular",Consolas,monospace;color:#70798a;text-transform:uppercase;letter-spacing:.1em}
-  .prioritylegend{display:grid;grid-template-columns:repeat(4,1fr);margin-bottom:14px;overflow:hidden}.prioritylegend>div{padding:9px 10px;border-right:1px solid #e2e6ee;font-size:10px;color:#687285}.prioritylegend>div:last-child{border-right:0}.prioritylegend b{display:block;font-size:11px;color:#2d3441}.prioritylegend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;background:var(--p4)}.prioritylegend .p1 i{background:var(--p1)}.prioritylegend .p2 i{background:var(--p2)}.prioritylegend .p3 i{background:var(--p3)}
+  .prioritylegend{display:grid;grid-template-columns:repeat(4,1fr);margin-bottom:14px;overflow:hidden}.prioritylegend>div{padding:9px 10px;border-right:1px solid #e2e6ee;font-size:10px;color:#687285}.prioritylegend>div:last-child{border-right:0}.prioritylegend b{display:block;font-size:11px;color:#2d3441}.prioritylegend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;background:var(--defer)}.prioritylegend .immediate i{background:var(--immediate)}.prioritylegend .outofcycle i{background:var(--outofcycle)}.prioritylegend .scheduled i{background:var(--scheduled)}
   .lightpanel{background:#fff;border:1px solid #d9deea;border-radius:10px;box-shadow:0 10px 28px rgba(30,40,65,.06)}
   details.add{margin-bottom:14px}details.add summary{list-style:none;padding:14px 16px;font-weight:700;cursor:pointer;display:flex;justify-content:space-between}
   details.add summary::-webkit-details-marker{display:none}details.add summary:after{content:"+";color:#697386}details.add[open] summary:after{content:"−"}
   .form{border-top:1px solid #e4e7ee;padding:14px;display:grid;gap:10px}
   input[type=text],select{width:100%;border:1px solid #cfd5e2;border-radius:5px;padding:9px 10px;background:#fff;color:#171b25}
+  .fieldlabel{display:grid;gap:4px;color:#697386;font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.06em}.fieldlabel select{font-size:12px;text-transform:none;letter-spacing:0}.formactions{display:flex;gap:7px}.formactions .btn{flex:1}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.checks{display:grid;gap:7px;padding:5px 0}
   .check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:#5e687a}.check input{accent-color:#4d65e6}
   .hint{font-size:11.5px;color:#7a8393}.targetlist{display:flex;flex-direction:column;gap:9px}
@@ -73,7 +74,7 @@ INDEX_HTML = r"""<!doctype html>
   .targetname{font-weight:750;overflow-wrap:anywhere}.targetname a{text-decoration:none}.targetname a:hover{text-decoration:underline}
   .targetid{font:10px "SFMono-Regular",Consolas,monospace;color:#9098a6;margin-top:2px}
   .badges{display:flex;gap:5px;flex-wrap:wrap;margin-top:9px}.tag{font:700 9.5px "SFMono-Regular",Consolas,monospace;text-transform:uppercase;letter-spacing:.04em;border:1px solid #d5dae5;border-radius:20px;padding:3px 6px;color:#5c6575;background:#f7f8fb}
-  .tag.hot{color:#c93025;background:#fff0ee;border-color:#ffd0ca}.tag.live{color:#1c6470;background:#eafcff;border-color:#b9edf4}.tag.demo{color:#674100;background:#fff4d8;border-color:#ffdfa0}
+  .tag.hot{color:#c93025;background:#fff0ee;border-color:#ffd0ca}.tag.live{color:#1c6470;background:#eafcff;border-color:#b9edf4}.tag.demo{color:#674100;background:#fff4d8;border-color:#ffdfa0}.tag.warn{color:#8a5700;background:#fff5dc;border-color:#f5d487}
   .source{font-size:11.5px;color:#6f7888;margin:9px 0}.source.ready{color:#354fd1}.targetactions{display:flex;gap:6px;flex-wrap:wrap}
   .results{display:flex;flex-direction:column;gap:14px}.empty{min-height:390px;display:grid;grid-template-columns:1fr 1fr;overflow:hidden}
   .emptycopy{padding:clamp(28px,4vw,54px);display:flex;flex-direction:column;justify-content:center}.emptycopy .eyebrow{color:#5563d8}.emptycopy h3{font-size:clamp(28px,3.3vw,46px);line-height:1.04;letter-spacing:-.045em;margin:13px 0}.emptycopy p{color:#687285;max-width:50ch}
@@ -81,35 +82,34 @@ INDEX_HTML = r"""<!doctype html>
   .result{background:#fff;border:1px solid #d7dce7;border-radius:10px;overflow:hidden;box-shadow:0 12px 35px rgba(30,40,65,.07)}
   .resulthead{display:grid;grid-template-columns:154px 1fr auto;gap:17px;align-items:center;padding:19px 21px;border-bottom:1px solid #e2e6ee}
   .prioritybox{min-width:0}.prioritymeaning{text-align:center;color:#586274;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.065em;margin-top:5px}.prioritydue{text-align:center;color:#858e9d;font:9.5px "SFMono-Regular",Consolas,monospace;margin-top:2px}
-  .priority{height:66px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:white;font:850 28px "SFMono-Regular",Consolas,monospace;background:var(--p4)}
-  .priority.P1{background:var(--p1)}.priority.P2{background:var(--p2);color:#2d1d00}.priority.P3{background:var(--p3)}
+  .priority{height:66px;display:flex;align-items:center;justify-content:center;text-align:center;border-radius:6px;color:white;font:850 15px "SFMono-Regular",Consolas,monospace;background:var(--defer);padding:8px}
+  .priority.immediate{background:var(--immediate)}.priority.out-of-cycle{background:var(--outofcycle);color:#2d1d00}.priority.scheduled{background:var(--scheduled)}
   .rname{font-size:12px;color:#737d8d;margin-bottom:4px}.action{font-size:20px;font-weight:780;line-height:1.2;letter-spacing:-.025em}.reportlink{text-decoration:none;color:#3048c5;font-weight:700;font-size:12px;white-space:nowrap}
   .metricrow{padding:12px 21px;display:flex;gap:7px;flex-wrap:wrap;background:#fafbfc;border-bottom:1px solid #e5e8ef}.metric{font:11px "SFMono-Regular",Consolas,monospace;background:#edf0f5;border-radius:4px;padding:4px 7px;color:#4f5969}.metric.alert{background:#ffebe8;color:#c42f24}.metric.audit{background:#e8f9fc;color:#226976}
   .resultbody{display:grid;grid-template-columns:minmax(320px,.85fr) minmax(430px,1.15fr);gap:0}.compare{padding:21px;border-right:1px solid #e4e7ed}.explain{padding:21px}
   .microtitle{font:750 10px "SFMono-Regular",Consolas,monospace;text-transform:uppercase;letter-spacing:.12em;color:#768093;margin-bottom:12px}
   .barrow{display:grid;grid-template-columns:92px 1fr 40px;gap:9px;align-items:center;margin:9px 0;font-size:11px}.track{height:8px;background:#e7eaf0;border-radius:2px;overflow:hidden}.fill{height:100%;background:#a7afbd}.fill.epss{background:#6f7f99}.fill.pt{background:#5368e8}.barvalue{font:700 11px "SFMono-Regular",Consolas,monospace;text-align:right}
   .outcomegrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:14px}.outcomemicro{border:1px solid #dfe3eb;background:#f8f9fb;border-radius:5px;padding:9px}.outcomemicro b{display:block;color:#344ac8;font:800 18px "SFMono-Regular",Consolas,monospace}.outcomemicro span{font-size:9.5px;color:#747e8f;text-transform:uppercase;letter-spacing:.04em}
-  .comparefoot{font-size:11.5px;color:#727c8d;margin-top:13px}.basis{border-left:3px solid #5368e8;background:#f0f2ff;color:#27336f;border-radius:3px;padding:9px 11px;margin-bottom:11px;font-size:11.5px;font-weight:650}.factorflow{display:grid;grid-template-columns:1fr 15px 1fr 15px 1fr;gap:5px;align-items:stretch}.factor{border:1px solid #dfe3eb;background:#f8f9fb;border-radius:5px;padding:10px}.factor span{font:9px "SFMono-Regular",Consolas,monospace;text-transform:uppercase;color:#7e8796}.factor b{display:block;font-size:12px;margin-top:4px}.factorarrow{display:flex;align-items:center;justify-content:center;color:#a1a9b6}.riskline{margin-top:10px;background:#171d29;color:white;padding:11px 13px;border-radius:5px;display:flex;justify-content:space-between;align-items:center}.riskline span{color:#9aa4b5;font-size:10px;text-transform:uppercase;letter-spacing:.08em}.riskline b{color:#8fa3ff;font:800 18px "SFMono-Regular",Consolas,monospace}
+  .comparefoot{font-size:11.5px;color:#727c8d;margin-top:13px}.basis{border-left:3px solid #5368e8;background:#f0f2ff;color:#27336f;border-radius:3px;padding:9px 11px;margin-bottom:11px;font-size:11.5px;font-weight:650}.ssvcflow{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;align-items:stretch}.factor{border:1px solid #dfe3eb;background:#f8f9fb;border-radius:5px;padding:10px}.factor span{font:9px "SFMono-Regular",Consolas,monospace;text-transform:uppercase;color:#7e8796}.factor b{display:block;font-size:12px;margin-top:4px}.factor small{display:block;color:#7e8796;font-size:9px;margin-top:3px}.decisionline{margin-top:10px;background:#171d29;color:white;padding:11px 13px;border-radius:5px;display:flex;justify-content:space-between;align-items:center}.decisionline span{color:#9aa4b5;font-size:10px;text-transform:uppercase;letter-spacing:.08em}.decisionline b{color:#8fa3ff;font:800 15px "SFMono-Regular",Consolas,monospace}.confirmbar{margin-top:9px;border:1px solid #f0cf86;background:#fff7e4;color:#765017;border-radius:5px;padding:8px 10px;font-size:10.5px}
   .evidence{list-style:none;padding:0;margin:11px 0 0;display:grid;grid-template-columns:1fr 1fr;gap:6px}.evidence li{border:1px solid #e0e4ec;border-radius:5px;padding:8px 9px;display:grid;grid-template-columns:18px 1fr;gap:5px;align-items:start}.evidenceicon{width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#e5e8ee;color:#687386;font:800 9px "SFMono-Regular",Consolas,monospace}.evidenceicon.confirmed{background:#dff7eb;color:#15704a}.evidenceicon.attention{background:#fff0d6;color:#985d00}.evidence strong{display:block;font-size:10.5px}.evidence small{display:block;color:#737d8d;font-size:9.5px;line-height:1.35;margin-top:1px}
   .advisoryline{margin-top:9px;display:flex;gap:6px;flex-wrap:wrap}.advisoryline a,.advisoryline span{font:700 10px "SFMono-Regular",Consolas,monospace;text-decoration:none;border:1px solid #ccd3e1;background:#f7f8fb;color:#4053ba;padding:4px 7px;border-radius:4px}.advisoryline a:hover{text-decoration:underline}
   .running{padding:26px;border-left:4px solid #5368e8}.running strong{font-size:18px}.scanline{height:3px;background:#e1e5ed;margin-top:16px;overflow:hidden}.scanline:after{content:"";display:block;width:32%;height:100%;background:#5368e8;animation:scan 1s infinite ease-in-out}@keyframes scan{from{transform:translateX(-100%)}to{transform:translateX(410%)}}
   .toast{position:fixed;right:22px;bottom:22px;background:#151a25;color:#fff;border:1px solid #343d50;padding:11px 15px;border-radius:6px;box-shadow:0 12px 40px rgba(0,0,0,.28);transform:translateY(90px);opacity:0;transition:.2s;z-index:30;max-width:420px}.toast.show{transform:none;opacity:1}.toast.error{border-color:#a63d36}
   .filehidden{display:none}
   @media(max-width:1100px){.hero{grid-template-columns:1fr}.benchmark{grid-template-columns:1fr}.workspaceinner{grid-template-columns:300px minmax(0,1fr)}.resultbody{grid-template-columns:1fr}.compare{border-right:0;border-bottom:1px solid #e4e7ed}}
-  @media(max-width:820px){.topmeta .hide-sm{display:none}.outcomes{grid-template-columns:1fr}.outcome{border-left:1px solid var(--line);border-top:0}.kpis{grid-template-columns:1fr 1fr}.kpi+.kpi{border-left:1px solid var(--line)}.workspaceinner{grid-template-columns:1fr}.empty{grid-template-columns:1fr}.resulthead{grid-template-columns:104px 1fr}.priority{height:54px}.reportlink{grid-column:2}.flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg)}.decision{grid-column:1}.factorflow{grid-template-columns:1fr}.factorarrow{transform:rotate(90deg)}}
+  @media(max-width:820px){.outcomes{grid-template-columns:1fr}.outcome{border-left:1px solid var(--line);border-top:0}.kpis{grid-template-columns:1fr 1fr}.kpi+.kpi{border-left:1px solid var(--line)}.workspaceinner{grid-template-columns:1fr}.empty{grid-template-columns:1fr}.resulthead{grid-template-columns:104px 1fr}.priority{height:54px}.reportlink{grid-column:2}.flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg)}.decision{grid-column:1}.ssvcflow{grid-template-columns:1fr 1fr}}
   @media(max-width:520px){h1{font-size:43px}.topbar{padding:0 16px}.brand{font-size:13px}.hero{padding-left:16px;padding-right:16px}.kpis{padding-left:16px;padding-right:16px}.prioritylegend{grid-template-columns:1fr 1fr}.prioritylegend>div{border-bottom:1px solid #e2e6ee}.resulthead{padding:15px}.resultbody>div,.metricrow{padding-left:15px;padding-right:15px}.versus{grid-template-columns:1fr}.vs{text-align:center}.row2{grid-template-columns:1fr}}
 </style></head>
 <body>
 <header class="topbar">
   <div class="brand"><span class="brandmark" aria-hidden="true"></span>PATCH<span>TRIAGE</span></div>
-  <div class="topmeta"><span class="statusdot"></span><span class="hide-sm">LOCAL DECISION ENGINE</span><span id="version" class="mono">v—</span></div>
 </header>
 
 <section class="hero">
   <div>
-    <div class="eyebrow">Black Hat Arsenal · live decision support</div>
+    <div class="eyebrow">Evidence-informed deployment decisions</div>
     <h1>Patch what matters <em>first.</em></h1>
-    <p>Turn scanner noise, exploitation intelligence, and runtime evidence into one defensible remediation queue — without letting AI invent a score.</p>
+    <p>Combine global threat evidence with your system exposure, mission impact, and safety context to make one defensible SSVC deployment decision — without letting AI invent a score.</p>
     <div class="heroactions">
       <button class="btn primary run-control" id="demo">Run the offline demo</button>
       <button class="btn ghost" id="jump">Open my workspace ↓</button>
@@ -120,31 +120,31 @@ INDEX_HTML = r"""<!doctype html>
     <div class="flow">
       <div class="node"><span class="nodecode">01 / FIND</span><strong>Scanner evidence</strong><small>CVE · package · fixed version</small></div>
       <div class="arrow">→</div>
-      <div class="node"><span class="nodecode">02 / PROVE</span><strong>Threat evidence</strong><small>KEV · EPSS · MSRC · RHSA · USN · Debian · GHSA</small></div>
+      <div class="node"><span class="nodecode">02 / THREAT</span><strong>Exploitation state</strong><small>Active · Public PoC · None · EPSS watch signal</small></div>
       <div class="arrow">→</div>
-      <div class="node"><span class="nodecode">03 / CONTEXT</span><strong>Runtime relevance</strong><small>Exposure · reachability · telemetry</small></div>
-      <div class="decision"><div><b>Upgrade libc6 on web-frontend</b><br><span>known exploited · ransomware use · fix available</span></div><div class="p1">P1<small>Patch Immediately</small></div></div>
+      <div class="node"><span class="nodecode">03 / STAKEHOLDER</span><strong>Your deployment</strong><small>Exposure · automation · mission · safety</small></div>
+      <div class="decision"><div><b>Upgrade libc6 on web-frontend</b><br><span>Active · Open · Automatable · High human impact → Immediate</span></div><div class="outcome-now">Immediate</div></div>
     </div>
   </div>
 </section>
 
-<section class="benchmark" aria-label="Reproducible benchmark outcomes">
+<section class="benchmark" aria-label="SSVC decision model">
   <div class="benchmarkcopy">
-    <div class="eyebrow">Reproducible user outcome</div>
-    <h2>Start with 97.9% less review noise.</h2>
-    <p>11 pinned enterprise systems · 26,356 findings · 50 reviews per system · CISA KEV and FIRST EPSS ground truth</p>
+    <div class="eyebrow">CERT/CC SSVC · Deployer model</div>
+    <h2>Severity informs. Your environment decides.</h2>
+    <p>KEV and PoC evidence establish what attackers are doing. SSVC combines that state with how your system is deployed and what failure means to your organization.</p>
   </div>
   <div class="outcomes">
-    <div class="outcome"><strong>550</strong><span>first-pass reviews</span><small>down from 26,356 raw findings</small></div>
-    <div class="outcome"><strong>97%</strong><span>known-exploited coverage</span><small>84 of 87 KEV findings surfaced</small></div>
-    <div class="outcome"><strong>84×</strong><span>more KEV than CVSS sort</span><small>84 surfaced versus 1, same budget</small></div>
+    <div class="outcome"><strong>E</strong><span>Exploitation</span><small>KEV → Active · public exploit → PoC</small></div>
+    <div class="outcome"><strong>EXP</strong><span>Your attack surface</span><small>Open · Controlled · Small</small></div>
+    <div class="outcome"><strong>HI</strong><span>Human impact</span><small>Mission + safety consequences</small></div>
   </div>
 </section>
 
 <section class="kpis" aria-label="Workspace totals">
   <div class="kpi"><div class="value" id="k-targets">0</div><div class="label">targets in scope</div></div>
   <div class="kpi"><div class="value" id="k-kev">0</div><div class="label">known exploited</div></div>
-  <div class="kpi"><div class="value" id="k-p1">0</div><div class="label">P1 · Patch Immediately</div></div>
+  <div class="kpi"><div class="value" id="k-immediate">0</div><div class="label">Immediate decisions</div></div>
   <div class="kpi"><div class="value" id="k-audit">—</div><div class="label">decisions verified</div></div>
 </section>
 
@@ -152,26 +152,32 @@ INDEX_HTML = r"""<!doctype html>
   <div class="workspaceinner">
     <aside>
       <div class="sectiontitle"><h2>Targets</h2><span>asset context</span></div>
-      <details class="add lightpanel">
-        <summary>Add a target</summary>
+      <details class="add lightpanel" id="targetform">
+        <summary id="form-title">Add a target</summary>
         <div class="form">
           <input type="text" id="f-name" maxlength="120" placeholder="System name" aria-label="System name">
           <input type="text" id="f-url" placeholder="https:// dashboard, repo, or runbook" aria-label="Target link URL">
+          <label class="fieldlabel">System Exposure
+            <select id="f-exposure"><option value="unknown" selected>Unknown — assume Open</option><option value="open">Open — widely accessible</option><option value="controlled">Controlled — access restricted</option><option value="small">Small — local / highly controlled</option></select>
+          </label>
+          <label class="fieldlabel">Mission Impact
+            <select id="f-mission"><option value="unknown" selected>Unknown — assume Support Crippled</option><option value="degraded">Degraded — non-essential impact</option><option value="mef_support_crippled">MEF Support Crippled</option><option value="mef_failure">MEF Failure</option><option value="mission_failure">Mission Failure</option></select>
+          </label>
           <div class="row2">
-            <select id="f-crit" aria-label="Business criticality">
-              <option value="critical">critical</option><option value="high">high</option>
-              <option value="medium">medium</option><option value="low">low</option>
-              <option value="unknown" selected>unknown</option>
-            </select>
-            <input type="text" id="f-sources" placeholder="otel, falco" aria-label="Context sources">
+            <label class="fieldlabel">Safety Impact
+              <select id="f-safety"><option value="unknown" selected>Unknown — assume Marginal</option><option value="negligible">Negligible</option><option value="marginal">Marginal</option><option value="critical">Critical</option><option value="catastrophic">Catastrophic</option></select>
+            </label>
+            <label class="fieldlabel">Automatable
+              <select id="f-automatable"><option value="unknown" selected>Unknown — assume Yes</option><option value="yes">Yes</option><option value="no">No</option></select>
+            </label>
           </div>
+          <input type="text" id="f-sources" placeholder="Context evidence: CMDB, OTel, Falco" aria-label="Context sources">
           <div class="checks">
-            <label class="check"><input type="checkbox" id="f-exposed"> Internet-exposed</label>
             <label class="check"><input type="checkbox" id="f-reachable"> Vulnerable path is reachable</label>
             <label class="check"><input type="checkbox" id="f-runtime"> Observed at runtime</label>
           </div>
-          <button class="btn primary" id="add">Add target</button>
-          <div class="hint">Positive runtime evidence raises confidence. Missing telemetry never suppresses risk.</div>
+          <div class="formactions"><button class="btn primary" id="add">Add target</button><button class="btn" id="cancel-edit" type="button" hidden>Cancel</button></div>
+          <div class="hint">Unknown SSVC inputs use conservative official defaults and are flagged for confirmation. Reachability and runtime remain supporting evidence.</div>
         </div>
       </details>
       <div class="targetlist" id="targetlist"></div>
@@ -182,25 +188,25 @@ INDEX_HTML = r"""<!doctype html>
         <select id="backend" aria-label="Triage backend"></select>
         <button class="btn small run-control" id="runall">Run all</button>
       </span></div>
-      <div class="prioritylegend lightpanel" aria-label="Priority meanings">
-        <div class="p1"><b><i></i>P1 · Patch Immediately</b>Act now · target 3–7 days</div>
-        <div class="p2"><b><i></i>P2 · Patch Next</b>Next window · target 14 days</div>
-        <div class="p3"><b><i></i>P3 · Schedule Patch</b>Normal cycle · target 30 days</div>
-        <div class="p4"><b><i></i>P4 · Monitor / Defer</b>Reassess · target 90 days</div>
+      <div class="prioritylegend lightpanel" aria-label="SSVC outcome meanings">
+        <div class="immediate"><b><i></i>Immediate</b>Act now · default target 3 days</div>
+        <div class="outofcycle"><b><i></i>Out-of-Cycle</b>Next available opportunity · 14 days</div>
+        <div class="scheduled"><b><i></i>Scheduled</b>Normal maintenance · 30 days</div>
+        <div class="defer"><b><i></i>Defer</b>Monitor and reassess · 90 days</div>
       </div>
       <div class="results" id="results">
         <div class="empty lightpanel">
           <div class="emptycopy">
             <div class="eyebrow">Decision, not detection</div>
-            <h3>Show the queue that a CVSS sort misses.</h3>
-            <p>Load the bundled scan and threat snapshots. In one click, PatchTriage produces a package-level action, a three-way baseline comparison, and a machine-audited explanation.</p>
-            <div><button class="btn primary run-control demo-trigger">Launch Arsenal demo</button></div>
+            <h3>See why the same CVE needs a different action here.</h3>
+            <p>Load the bundled evidence. PatchTriage applies the official SSVC Deployer path, shows every inferred input and confidence level, then groups findings into package-level actions.</p>
+            <div><button class="btn primary run-control demo-trigger">Launch Demo</button></div>
           </div>
           <div class="emptyviz">
             <div class="versus">
-              <div class="method miss"><small>CVSS SORT / TOP 1</small><strong>0 / 1 KEV</strong><small>high severity, wrong first move</small></div>
+              <div class="method miss"><small>GLOBAL SIGNALS</small><strong>KEV · EPSS · CVSS</strong><small>what attackers can do</small></div>
               <div class="vs">VS</div>
-              <div class="method hit"><small>PATCHTRIAGE / TOP 1</small><strong>1 / 1 KEV</strong><small>known exploitation first</small></div>
+              <div class="method hit"><small>SSVC / YOUR SYSTEM</small><strong>Immediate</strong><small>what your team should do now</small></div>
             </div>
           </div>
         </div>
@@ -212,8 +218,8 @@ INDEX_HTML = r"""<!doctype html>
 <input type="file" id="filepick" class="filehidden" accept=".json,.spdx,.cdx">
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script>
-let CFG={backends:["rules"],has_key:false,version:"—"};
-let TARGETS=[];let RESULTS=new Map();let pickTarget=null;let toastTimer=null;
+let CFG={backends:["rules"],has_key:false};
+let TARGETS=[];let RESULTS=new Map();let pickTarget=null;let editingTarget=null;let toastTimer=null;
 
 async function api(method,path,body){
   const opt={method,headers:{}};
@@ -233,15 +239,16 @@ function pct(value,total){return value&&total?Math.max(5,Math.round(value/total*
 function sources(value){return String(value||"").split(",").map(v=>v.trim()).filter(Boolean);}
 
 async function loadConfig(){
-  CFG=await api("GET","/api/config");document.getElementById("version").textContent="v"+CFG.version;
-  document.getElementById("backend").innerHTML=CFG.backends.map(b=>`<option value="${esc(b)}">${esc(b)}</option>`).join("");
+  CFG=await api("GET","/api/config");
+  const labels={rules:"SSVC deterministic",claude:"SSVC + AI explanation",cascade:"SSVC + AI cascade"};
+  document.getElementById("backend").innerHTML=CFG.backends.map(b=>`<option value="${esc(b)}">${esc(labels[b]||b)}</option>`).join("");
 }
 async function loadTargets(){
   TARGETS=await api("GET","/api/targets");renderTargets();updateKpis();
 }
 function contextTags(target){
-  const tags=[`<span class="tag">${esc(target.criticality)}</span>`];
-  if(target.internet_exposed)tags.push('<span class="tag hot">exposed</span>');
+  const exposure=target.system_exposure||"unknown",mission=target.mission_impact||"unknown",safety=target.safety_impact||"unknown",automatable=target.automatable||"unknown";
+  const tags=[`<span class="tag ${exposure==="open"?"hot":exposure==="unknown"?"warn":""}">EXP ${esc(exposure)}</span>`,`<span class="tag ${mission==="unknown"?"warn":""}">MI ${esc(mission)}</span>`,`<span class="tag ${safety==="unknown"?"warn":""}">SI ${esc(safety)}</span>`,`<span class="tag ${automatable==="unknown"?"warn":""}">A ${esc(automatable)}</span>`];
   if(target.reachable)tags.push('<span class="tag live">reachable</span>');
   if(target.runtime_observed)tags.push('<span class="tag live">runtime</span>');
   if(target.demo)tags.push('<span class="tag demo">offline demo</span>');
@@ -257,6 +264,7 @@ function renderTargets(){
       <div class="badges">${contextTags(target)}</div>
       <div class="source ${target.source_file?"ready":""}">${target.source_file?`● ${esc(target.source_format)} evidence attached`:"○ waiting for scan or SBOM"}</div>
       <div class="targetactions">
+        <button class="btn small" data-action="edit">Review SSVC context</button>
         <button class="btn small" data-action="import">Attach evidence</button>
         <button class="btn small run-control" data-action="run" ${target.source_file?"":"disabled"}>Run</button>
         <button class="btn small danger" data-action="delete">Delete</button>
@@ -269,70 +277,71 @@ function updateKpis(){
   const verified=values.reduce((n,r)=>n+r.audit_verified,0);
   document.getElementById("k-targets").textContent=TARGETS.length;
   document.getElementById("k-kev").textContent=values.reduce((n,r)=>n+r.kev,0);
-  document.getElementById("k-p1").textContent=values.reduce((n,r)=>n+r.counts.P1,0);
+  document.getElementById("k-immediate").textContent=values.reduce((n,r)=>n+r.outcomes.immediate,0);
   document.getElementById("k-audit").textContent=totalFindings?Math.round(verified/totalFindings*100)+"%":"—";
 }
 function compareBlock(summary){
   const c=summary.comparison;if(!c)return '<div class="hint">No comparison available.</div>';
   const maximum=Math.max(1,c.kev_total);const o=c.outcome||{};
   const coverage=c.kev_total?`${o.kev_coverage_pct}%`:"n/a";
-  const gain=c.kev_total?`+${o.kev_gain_points}pt`:"n/a";
+  const urgent=c.urgent&&c.urgent.total?`${o.urgent_coverage_pct}%`:"n/a";
   return `<div class="microtitle">Outcome at a ${c.k}-finding review budget</div>
     <div class="outcomegrid">
       <div class="outcomemicro"><b>${esc(o.review_reduction_pct==null?"n/a":o.review_reduction_pct+"%")}</b><span>smaller first-pass queue</span></div>
       <div class="outcomemicro"><b>${esc(coverage)}</b><span>KEV coverage</span></div>
-      <div class="outcomemicro"><b>${esc(gain)}</b><span>coverage vs CVSS</span></div>
+      <div class="outcomemicro"><b>${esc(urgent)}</b><span>SSVC urgent coverage</span></div>
     </div>
     <div class="microtitle">Known-exploited findings surfaced</div>
     <div class="barrow"><span>CVSS only</span><div class="track"><div class="fill" style="width:${pct(c.kev.cvss,maximum)}%"></div></div><span class="barvalue">${c.kev.cvss}/${c.kev_total}</span></div>
     <div class="barrow"><span>EPSS only</span><div class="track"><div class="fill epss" style="width:${pct(c.kev.epss,maximum)}%"></div></div><span class="barvalue">${c.kev.epss}/${c.kev_total}</span></div>
-    <div class="barrow"><span>PatchTriage</span><div class="track"><div class="fill pt" style="width:${pct(c.kev.patchtriage,maximum)}%"></div></div><span class="barvalue">${c.kev.patchtriage}/${c.kev_total}</span></div>
-    <div class="comparefoot">Same findings and review budget. CISA KEV measures exploited-vulnerability coverage; FIRST EPSS is the independent likelihood baseline.</div>`;
+    <div class="barrow"><span>KEV first</span><div class="track"><div class="fill epss" style="width:${pct(c.kev.kev,maximum)}%"></div></div><span class="barvalue">${c.kev.kev}/${c.kev_total}</span></div>
+    <div class="barrow"><span>SSVC context</span><div class="track"><div class="fill pt" style="width:${pct(c.kev.ssvc,maximum)}%"></div></div><span class="barvalue">${c.kev.ssvc}/${c.kev_total}</span></div>
+    <div class="comparefoot">KEV-first is now an explicit baseline. SSVC may rank a KEV below another finding when your exposure and human impact justify a different deployment action.</div>`;
 }
 function explainBlock(summary){
   const x=summary.explanation;if(!x)return '<div class="hint">No actionable finding.</div>';
-  const f=x.factors;const likelihood=x.kev?"KEV confirmed":(x.epss==null?"EPSS n/a":`EPSS ${(x.epss*100).toFixed(1)}%`);
-  const context=[f.internet_exposed?"exposed":"exposure not flagged",f.reachable?"reachable":"reachability unknown",f.runtime_observed?"runtime seen":"runtime unknown"].join(" · ");
-  const risk=(Number(f.likelihood)*Number(f.impact)*Number(f.asset_weight)).toFixed(3);
+  const s=x.ssvc||{};const pointKeys=[["exploitation","Exploitation"],["system_exposure","System Exposure"],["automatable","Automatable"],["human_impact","Human Impact"]];
+  const flow=pointKeys.map(([key,label])=>{const p=s[key]||{};return `<div class="factor"><span>${esc(label)}</span><b>${esc(p.label||"Unknown")}</b><small>${esc(p.confidence||"low")} confidence · ${esc(p.source||"missing")}</small></div>`;}).join("");
   const marks={confirmed:"✓",attention:"!",unknown:"?","not-observed":"–"};
   const checks=(x.checks||[]).map(item=>`<li><span class="evidenceicon ${esc(item.status)}">${marks[item.status]||"·"}</span><span><strong>${esc(item.label)}</strong><small>${esc(item.value)}</small></span></li>`).join("");
   const advisories=(x.advisories||[]).map(a=>a.url
     ?`<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.source.toUpperCase())} · ${esc(a.advisory_id)} ↗</a>`
     :`<span>${esc(a.source.toUpperCase())} · ${esc(a.advisory_id)}</span>`).join("");
-  return `<div class="microtitle">Why ${esc(x.priority)} · ${esc(x.priority_label)}?</div>
+  return `<div class="microtitle">Why ${esc(s.decision_label||x.outcome_label)}?</div>
     <div class="basis">${esc(x.basis)}</div>
-    <div class="factorflow">
-      <div class="factor"><span>Likelihood</span><b>${esc(likelihood)}</b></div><div class="factorarrow">×</div>
-      <div class="factor"><span>Impact</span><b>CVSS ${esc(x.cvss==null?"n/a":x.cvss)}</b></div><div class="factorarrow">×</div>
-      <div class="factor"><span>Asset</span><b>${esc(context)}</b></div>
-    </div>
-    <div class="riskline"><span>${esc(x.package)} · deterministic risk contribution</span><b>${risk}</b></div>
-    ${checks?`<ul class="evidence" aria-label="Priority evidence checklist">${checks}</ul>`:""}
+    <div class="ssvcflow">${flow}</div>
+    <div class="decisionline"><span>SSVC Deployer · ${esc(s.model||"")}</span><b>${esc(s.decision_label||"Unknown")}</b></div>
+    ${(x.needs_confirmation||[]).length?`<div class="confirmbar">Confirm inferred inputs: ${esc(x.needs_confirmation.map(v=>String(v).replaceAll("_"," ")).join(", "))}. Conservative defaults remain active until reviewed.</div>`:""}
+    ${checks?`<ul class="evidence" aria-label="Decision evidence checklist">${checks}</ul>`:""}
     ${advisories?`<div class="advisoryline">${advisories}</div>`:""}`;
 }
 function renderResult(summary){
   const name=summary.url?`<a href="${esc(summary.url)}" target="_blank" rel="noopener">${esc(summary.name)} ↗</a>`:esc(summary.name);
+  const context=summary.evaluated_context||{};
+  const contextText=[["Exposure",context.system_exposure],["Automatable",context.automatable],["Mission",context.mission_impact],["Safety",context.safety_impact]].map(([label,value])=>`${label} ${String(value||"unknown").replaceAll("_"," ")}`).join(" · ");
   return `<article class="result" data-result="${summary.target_id}">
     <div class="resulthead">
-      <div class="prioritybox"><div class="priority ${esc(summary.top_priority)}">${esc(summary.top_priority||"—")}</div><div class="prioritymeaning">${esc(summary.top_priority_label||"")}</div><div class="prioritydue">${summary.top_deadline_days==null?"":`target: ≤ ${esc(summary.top_deadline_days)} days`}</div></div>
+      <div class="prioritybox"><div class="priority ${esc(String(summary.top_ssvc_decision||"defer").toLowerCase().replaceAll(" ","-"))}">${esc(summary.top_ssvc_decision||"No decision")}</div><div class="prioritymeaning">SSVC outcome</div><div class="prioritydue">${summary.top_deadline_days==null?"":`target: ≤ ${esc(summary.top_deadline_days)} days`}</div></div>
       <div><div class="rname">${name} · ${summary.duration_ms} ms ${summary.demo?"· offline snapshot":""}</div><div class="action">${esc(summary.top_action||"No actionable findings")}</div></div>
       <a class="reportlink" href="${esc(summary.report_url)}" target="_blank" rel="noopener">Open full report →</a>
     </div>
     <div class="metricrow">
-      <span class="metric alert">P1 · Patch Immediately ${summary.counts.P1}</span><span class="metric">P2 · Patch Next ${summary.counts.P2}</span>
+      <span class="metric alert">Immediate ${summary.outcomes.immediate}</span><span class="metric">Out-of-Cycle ${summary.outcomes.out_of_cycle}</span>
       <span class="metric">${summary.total} findings</span><span class="metric">${summary.actions} package actions</span>
       <span class="metric alert">${summary.kev} KEV</span><span class="metric audit">audit ${summary.audit_verified}/${summary.total}</span>
       <span class="metric">${summary.vendor_advisories||0} vendor advisories</span>
       ${(summary.vendor_sources||[]).map(s=>`<span class="metric">${esc(s.toUpperCase())}</span>`).join("")}
       ${(summary.vendor_errors||[]).length?`<span class="metric alert" title="${esc(summary.vendor_errors.join(" | "))}">${summary.vendor_errors.length} connector warnings</span>`:""}
-      <span class="metric">risk cut ${summary.risk_reduced}</span>
+      <span class="metric">SSVC ${esc(summary.top_ssvc_decision||"n/a")}</span>
+      ${(summary.ssvc_confirmation_fields||[]).length?`<span class="metric alert">confirm ${esc(summary.ssvc_confirmation_fields.map(v=>String(v).replaceAll("_"," ")).join(", "))}</span>`:""}
     </div>
+    <div class="confirmbar">Target context used · ${esc(contextText)}${(context.context_sources||[]).length?` · Sources ${esc(context.context_sources.join(", "))}`:""}</div>
     <div class="resultbody"><div class="compare">${compareBlock(summary)}</div><div class="explain">${explainBlock(summary)}</div></div>
   </article>`;
 }
 function renderResults(){
   const results=document.getElementById("results");
-  if(!RESULTS.size){results.innerHTML='<div class="running lightpanel"><strong>No completed decisions yet.</strong><div class="hint">Run a target or launch the offline Arsenal demo.</div></div>';updateKpis();return;}
+  if(!RESULTS.size){results.innerHTML='<div class="running lightpanel"><strong>No completed decisions yet.</strong><div class="hint">Run a target or launch the offline Demo.</div></div>';updateKpis();return;}
   results.innerHTML=[...RESULTS.values()].map(renderResult).join("");updateKpis();
 }
 async function runTargets(ids){
@@ -350,27 +359,28 @@ async function runTargets(ids){
   setBusy(false);updateKpis();
 }
 async function launchDemo(){
-  try{setBusy(true);notify("Loading bundled threat evidence…");const target=await api("POST","/api/demo",{});await loadTargets();await runTargets([target.id]);notify("Offline Arsenal demo is ready.");}
+  try{setBusy(true);notify("Loading bundled threat evidence…");const target=await api("POST","/api/demo",{});await loadTargets();await runTargets([target.id]);notify("Offline Demo is ready.");}
   catch(error){notify(error.message,true);setBusy(false);}
 }
 
 document.getElementById("jump").onclick=()=>document.getElementById("workspace").scrollIntoView();
 document.getElementById("demo").onclick=launchDemo;
 document.getElementById("results").onclick=event=>{if(event.target.closest(".demo-trigger"))launchDemo();};
+function contextPayload(){return {system_exposure:document.getElementById("f-exposure").value,mission_impact:document.getElementById("f-mission").value,safety_impact:document.getElementById("f-safety").value,automatable:document.getElementById("f-automatable").value,reachable:document.getElementById("f-reachable").checked||null,runtime_observed:document.getElementById("f-runtime").checked||null,context_sources:sources(document.getElementById("f-sources").value)};}
+function resetForm(){editingTarget=null;document.getElementById("form-title").textContent="Add a target";document.getElementById("add").textContent="Add target";document.getElementById("cancel-edit").hidden=true;["f-name","f-url"].forEach(id=>{document.getElementById(id).disabled=false;document.getElementById(id).value="";});document.getElementById("f-sources").value="";["f-exposure","f-mission","f-safety","f-automatable"].forEach(id=>document.getElementById(id).value="unknown");["f-reachable","f-runtime"].forEach(id=>document.getElementById(id).checked=false);}
+function editContext(target){editingTarget=target.id;document.getElementById("targetform").open=true;document.getElementById("form-title").textContent="Review SSVC context";document.getElementById("add").textContent="Save context";document.getElementById("cancel-edit").hidden=false;document.getElementById("f-name").value=target.name;document.getElementById("f-url").value=target.url||"";["f-name","f-url"].forEach(id=>document.getElementById(id).disabled=true);document.getElementById("f-exposure").value=target.system_exposure||"unknown";document.getElementById("f-mission").value=target.mission_impact||"unknown";document.getElementById("f-safety").value=target.safety_impact||"unknown";document.getElementById("f-automatable").value=target.automatable||"unknown";document.getElementById("f-reachable").checked=target.reachable===true;document.getElementById("f-runtime").checked=target.runtime_observed===true;document.getElementById("f-sources").value=(target.context_sources||[]).join(", ");document.getElementById("targetform").scrollIntoView({behavior:"smooth",block:"start"});}
 document.getElementById("add").onclick=async()=>{
-  const name=document.getElementById("f-name").value.trim();if(!name){notify("Give the target a system name.",true);return;}
+  const name=document.getElementById("f-name").value.trim();if(!editingTarget&&!name){notify("Give the target a system name.",true);return;}
   try{
-    await api("POST","/api/targets",{name,url:document.getElementById("f-url").value.trim(),criticality:document.getElementById("f-crit").value,
-      internet_exposed:document.getElementById("f-exposed").checked,reachable:document.getElementById("f-reachable").checked||null,
-      runtime_observed:document.getElementById("f-runtime").checked||null,context_sources:sources(document.getElementById("f-sources").value)});
-    ["f-name","f-url","f-sources"].forEach(id=>document.getElementById(id).value="");
-    ["f-exposed","f-reachable","f-runtime"].forEach(id=>document.getElementById(id).checked=false);
-    await loadTargets();notify("Target added.");
+    const wasEditing=editingTarget;if(editingTarget){await api("POST",`/api/targets/${editingTarget}/context`,contextPayload());RESULTS.delete(editingTarget);}else{await api("POST","/api/targets",{name,url:document.getElementById("f-url").value.trim(),...contextPayload()});}
+    resetForm();await loadTargets();renderResults();notify(wasEditing?"SSVC context saved. Run the target again to apply it.":"Target added.");
   }catch(error){notify(error.message,true);}
 };
+document.getElementById("cancel-edit").onclick=resetForm;
 document.getElementById("targetlist").onclick=async event=>{
   const button=event.target.closest("button");if(!button)return;
   const card=button.closest(".target"),id=card.dataset.id,action=button.dataset.action;
+  if(action==="edit")editContext(TARGETS.find(target=>target.id===id));
   if(action==="import"){pickTarget=id;document.getElementById("filepick").click();}
   if(action==="run")runTargets([id]);
   if(action==="delete"&&confirm("Delete this target and its local evidence?")){

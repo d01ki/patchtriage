@@ -199,7 +199,7 @@ def enrich_from_snapshot(findings: list[Finding], epss: dict, kev: dict,
                          nvd: dict | None = None) -> list[Finding]:
     """Attach bundled deterministic data without network or shared cache.
 
-    Used by the browser's one-click Arsenal demo. Keeping this path explicit
+    Used by the browser's one-click Demo. Keeping this path explicit
     avoids mutating PATCHTRIAGE_CACHE_DIR (process-global state) and prevents a
     tiny demo catalog from contaminating real enrichment runs.
     """

@@ -125,6 +125,10 @@ for image in "${TARGETS[@]}"; do
   echo "==> triaging ${image}"
   if "${PT[@]}" run "${reports[@]}" \
       --asset-id "${image}" --exposed --criticality high \
+      --ssvc-exposure open \
+      --ssvc-automatable yes \
+      --ssvc-mission-impact mef_support_crippled \
+      --ssvc-safety-impact negligible \
       --triage rules \
       --no-nvd \
       --no-vendor-advisories \

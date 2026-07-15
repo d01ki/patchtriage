@@ -43,6 +43,23 @@ jobs:
             demo_report.html
             demo_report.json
 
+  verification:
+    name: reviewer verification (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e .
+      - name: Verify SSVC and reproducibility
+        run: patchtriage verify --repeats 100 --output verification_report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reviewer-verification
+          path: verification_report.json
+
   docker:
     name: docker build + demo
     runs-on: ubuntu-latest

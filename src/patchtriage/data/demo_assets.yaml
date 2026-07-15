@@ -4,11 +4,23 @@ assets:
   - match: "web-frontend*"
     criticality: critical
     internet_exposed: true
+    system_exposure: open
+    automatable: yes
+    mission_impact: mef_failure
+    safety_impact: critical
     owner: platform-team
     notes: customer-facing checkout
   - match: "batch-*"
     criticality: low
     internet_exposed: false
+    system_exposure: controlled
+    automatable: no
+    mission_impact: degraded
+    safety_impact: negligible
   - match: "*"
     criticality: medium
     internet_exposed: false
+    system_exposure: controlled
+    automatable: unknown
+    mission_impact: degraded
+    safety_impact: negligible

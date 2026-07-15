@@ -7,6 +7,10 @@ inventory (simple YAML, checked into your repo) onto findings:
       - match: "web-frontend*"        # glob against asset identifier
         criticality: critical         # business criticality
         internet_exposed: true
+        system_exposure: open         # SSVC: small|controlled|open
+        automatable: yes              # SSVC: yes|no|unknown
+        mission_impact: mef_failure   # SSVC organizational consequence
+        safety_impact: marginal       # SSVC safety/well-being consequence
         reachable: true                # static call/dependency analysis
         runtime_observed: true         # eBPF / Falco / OpenTelemetry evidence
         context_sources: [otel, falco]
@@ -31,12 +35,35 @@ import yaml
 from .models import Finding
 
 
+_SSVC_CHOICES = {
+    "system_exposure": {"small", "controlled", "open", "unknown"},
+    "automatable": {"yes", "no", "unknown"},
+    "mission_impact": {
+        "degraded", "mef_support_crippled", "mef_failure",
+        "mission_failure", "unknown",
+    },
+    "safety_impact": {
+        "negligible", "marginal", "critical", "catastrophic", "unknown",
+    },
+}
+
+
 def _as_bool(value, field: str) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str) and value.strip().lower() in ("true", "false"):
         return value.strip().lower() == "true"
     raise ValueError(f"inventory field '{field}' must be true or false")
+
+
+def _as_choice(value, field: str) -> str:
+    if field == "automatable" and isinstance(value, bool):
+        return "yes" if value else "no"
+    normalized = str(value or "unknown").strip().lower().replace("-", "_")
+    if normalized not in _SSVC_CHOICES[field]:
+        allowed = ", ".join(sorted(_SSVC_CHOICES[field]))
+        raise ValueError(f"inventory field '{field}' must be one of: {allowed}")
+    return normalized
 
 
 def load_inventory(path: str | Path) -> list[dict]:
@@ -67,6 +94,9 @@ def apply_context(findings: list[Finding], inventory: list[dict]) -> int:
                 if "runtime_observed" in rule:
                     f.asset.runtime_observed = _as_bool(
                         rule["runtime_observed"], "runtime_observed")
+                for field in _SSVC_CHOICES:
+                    if field in rule:
+                        setattr(f.asset, field, _as_choice(rule[field], field))
                 if "context_sources" in rule:
                     sources = rule["context_sources"]
                     if isinstance(sources, str):

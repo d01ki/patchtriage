@@ -1,21 +1,19 @@
 """Layer 5 — AI triage.
 
-The LLM never invents scores: it receives the deterministic signals from
-Layers 1-3 (severity, CVSS, EPSS, KEV, exploit refs, asset context) and
-reasons over them like an analyst, returning structured JSON.
+The deterministic CERT/CC SSVC Deployer tree owns action timing. The LLM
+receives that final assessment and may add explanation, remediation steps,
+and uncertainty notes; it cannot rescore or override the decision.
 
 Backends are pluggable. Three are shipped:
-  * "rules"   — deterministic baseline (no API key needed, good for CI/demos)
+  * "rules"   — compatibility name for deterministic SSVC (no API key)
   * "claude"  — Anthropic API (default model: claude-opus-4-8), structured
                 output enforced via strict tool use.
   * "cascade" — two-tier agent pipeline: a fast screening model triages every
-                finding, and only findings that are high-signal (KEV / high
-                EPSS / exposed critical asset) or that fail the machine audit
-                are escalated to a frontier model. Frontier reasoning where it
-                matters, screening-tier cost everywhere else.
+                finding; urgent or low-confidence SSVC decisions and failed
+                explanation audits are escalated to a frontier model.
 
 Robustness: run_triage() parallelizes API calls and degrades gracefully —
-a finding whose API call fails is triaged by the deterministic rules baseline
+a finding whose API call fails is triaged by the deterministic SSVC baseline
 and tagged, so a network blip never aborts a 2,000-finding run.
 """
 
@@ -27,20 +25,23 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional, Protocol
 
 from ..models import Finding
+from ..ssvc import assess, triage_from_assessment
 
 DEFAULT_MODEL = "claude-opus-4-8"
 DEFAULT_SCREEN_MODEL = "claude-haiku-4-5"
 
 TRIAGE_SYSTEM_PROMPT = """\
 You are a vulnerability-management analyst performing patch triage.
-You will receive ONE finding as JSON containing deterministic signals
-(severity, CVSS, EPSS probability, CISA KEV status, exploit references,
-fix availability, asset criticality/exposure, reachability/runtime evidence).
+You will receive ONE finding plus a deterministic SSVC Deployer assessment.
+The SSVC decision and P1-P4 mapping are final. Your role is to explain that
+decision and propose concrete remediation steps, not to rescore the finding.
 
 Rules:
 - NEVER invent or adjust numeric scores. Reason only from the given signals.
-- KEV=true or EPSS>0.5 on an internet-exposed asset is almost always P1.
-- No available fix => recommend mitigation, not patching.
+- NEVER change the supplied SSVC decision, priority, or service-level target.
+- Distinguish observed exploitation (KEV/PoC) from predictive EPSS evidence.
+- No available fix means mitigation or investigation, not patching.
+- Call out low-confidence SSVC inputs that need human confirmation.
 - Be concise and concrete. Output via the `triage` tool only.
 """
 
@@ -51,16 +52,23 @@ TRIAGE_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "priority": {"type": "string", "enum": ["P1", "P2", "P3", "P4"]},
             "action": {"type": "string",
-                       "enum": ["patch_now", "patch_scheduled",
-                                "mitigate", "accept_risk", "investigate"]},
+                       "enum": ["patch_immediately", "patch_out_of_cycle",
+                                "patch_scheduled", "mitigate", "monitor",
+                                "investigate"]},
             "rationale": {"type": "string",
-                          "description": "2-3 sentences citing the signals"},
-            "suggested_deadline_days": {"type": "integer"},
+                          "description": "2-3 sentences citing SSVC inputs"},
+            "remediation_steps": {
+                "type": "array", "items": {"type": "string"},
+                "maxItems": 5,
+            },
+            "uncertainties": {
+                "type": "array", "items": {"type": "string"},
+                "maxItems": 5,
+            },
         },
-        "required": ["priority", "action", "rationale",
-                     "suggested_deadline_days"],
+        "required": ["action", "rationale", "remediation_steps",
+                     "uncertainties"],
         "additionalProperties": False,
     },
 }
@@ -71,42 +79,15 @@ class TriageBackend(Protocol):
 
 
 # ------------------------------------------------------------------ baseline
-class RulesBackend:
-    """Deterministic baseline. Also serves as the LLM's sanity reference."""
+class SSVCBackend:
+    """Deterministic CERT/CC SSVC Deployer decision backend."""
 
     def triage(self, f: Finding) -> dict:
-        e = f.enrichment
-        score = e.nvd_cvss_score or f.cvss_score or 0.0
-        epss = e.epss_score or 0.0
-        exposed = f.asset.internet_exposed is True
-        runtime_relevant = (f.asset.reachable is True
-                            or f.asset.runtime_observed is True)
-        has_fix = bool(f.package.fixed_version)
+        return triage_from_assessment(assess(f), backend="ssvc")
 
-        if e.in_cisa_kev or (epss >= 0.5 and (exposed or runtime_relevant)):
-            prio, days = "P1", 3 if e.kev_ransomware else 7
-        elif epss >= 0.1 or (score >= 9.0 and (exposed or runtime_relevant)):
-            prio, days = "P2", 14
-        elif score >= 7.0:
-            prio, days = "P3", 30
-        else:
-            prio, days = "P4", 90
 
-        action = ("patch_now" if prio == "P1" and has_fix
-                  else "mitigate" if prio == "P1"
-                  else "patch_scheduled" if has_fix
-                  else "investigate")
-        epss_str = f"{e.epss_score:.3f}" if e.epss_score is not None else "n/a"
-        return {
-            "priority": prio, "action": action,
-            "suggested_deadline_days": days,
-            "rationale": (f"rules: cvss={score}, epss={epss_str}, "
-                          f"kev={e.in_cisa_kev}, exposed={exposed}, "
-                          f"reachable={f.asset.reachable}, "
-                          f"runtime_observed={f.asset.runtime_observed}, "
-                          f"fix={has_fix}"),
-            "backend": "rules",
-        }
+class RulesBackend(SSVCBackend):
+    """Backward-compatible name for the deterministic SSVC backend."""
 
 
 # ------------------------------------------------------------------ Claude
@@ -128,7 +109,22 @@ def _make_anthropic_client():
 def _finding_payload(f: Finding) -> str:
     payload = f.model_dump(mode="json", exclude={"triage", "description"})
     payload["description"] = f.description[:600]
+    payload["ssvc_assessment"] = assess(f).model_dump(mode="json")
     return json.dumps(payload)
+
+
+def _merge_ai_recommendation(f: Finding, recommendation: dict,
+                             backend: str) -> dict:
+    """Keep the SSVC decision authoritative and attach AI assistance."""
+    result = triage_from_assessment(assess(f), backend=backend)
+    if recommendation.get("rationale"):
+        result["rationale"] = str(recommendation["rationale"])
+    result["ai_recommendation"] = {
+        "action": recommendation.get("action"),
+        "remediation_steps": recommendation.get("remediation_steps", []),
+        "uncertainties": recommendation.get("uncertainties", []),
+    }
+    return result
 
 
 class ClaudeBackend:
@@ -151,8 +147,7 @@ class ClaudeBackend:
         for block in resp.content:
             if block.type == "tool_use" and block.name == "triage":
                 out = dict(block.input)
-                out["backend"] = self.model
-                return out
+                return _merge_ai_recommendation(f, out, self.model)
         raise RuntimeError("Claude returned no triage tool_use block")
 
 
@@ -162,11 +157,9 @@ class CascadeBackend:
 
     Tier 1 (screen): every finding is triaged by a fast screening model.
     Tier 2 (deep):   a finding is re-triaged by the frontier model when it is
-      * high-signal — CISA KEV, EPSS >= 0.1, or on an internet-exposed
-        critical/high asset (getting these wrong is expensive), or
-      * audit-flagged — the screening decision failed the machine audit
-        (fabricated number, KEV downgrade, patch-without-fix, or 2+ level
-        divergence from the deterministic baseline).
+      * SSVC-urgent — Immediate or Out-of-Cycle needs richer guidance,
+      * context-uncertain — a conservative SSVC input needs confirmation, or
+      * audit-flagged — the screening explanation failed the machine audit.
 
     The escalation decision and its reasons are recorded in the triage output
     so every routing choice is itself auditable.
@@ -185,14 +178,12 @@ class CascadeBackend:
         from .audit import audit_finding  # deferred: audit imports engine
 
         reasons: list[str] = []
-        e = f.enrichment
-        if e.in_cisa_kev:
-            reasons.append("kev")
-        if (e.epss_score or 0.0) >= 0.1:
-            reasons.append("epss>=0.1")
-        if (f.asset.internet_exposed
-                and f.asset.criticality in ("critical", "high")):
-            reasons.append("exposed_high_value_asset")
+        assessment = assess(f)
+        if assessment.priority in ("P1", "P2"):
+            reasons.append(f"ssvc_{assessment.decision.value}")
+        if assessment.needs_confirmation:
+            reasons.append(
+                "ssvc_confirmation:" + ",".join(assessment.needs_confirmation))
 
         prev = f.triage
         f.triage = tentative
@@ -235,7 +226,7 @@ def run_triage(findings: list[Finding], backend: TriageBackend,
     """Triage every finding in place.
 
     API-backed runs parallelize across `jobs` workers. A finding whose API
-    call fails falls back to the deterministic rules baseline and is tagged
+    call fails falls back to the deterministic SSVC baseline and is tagged
     (backend="rules_fallback") — one flaky request never aborts the run.
     """
     rules = RulesBackend()
@@ -278,7 +269,7 @@ def run_triage_batch(findings: list[Finding], model: str = DEFAULT_MODEL,
     Best for large, non-interactive runs (nightly re-triage of a whole
     estate). Most batches complete within an hour; results are keyed by
     custom_id, never by position. Findings whose batch entry errors fall
-    back to the rules baseline, same as run_triage().
+    back to the SSVC baseline, same as run_triage().
     """
     client = _make_anthropic_client()
     rules = RulesBackend()
@@ -314,9 +305,7 @@ def run_triage_batch(findings: list[Finding], model: str = DEFAULT_MODEL,
         if result.result.type == "succeeded":
             for block in result.result.message.content:
                 if block.type == "tool_use" and block.name == "triage":
-                    out = dict(block.input)
-                    out["backend"] = f"{model} (batch)"
-                    by_id[result.custom_id] = out
+                    by_id[result.custom_id] = dict(block.input)
 
     for i, f in enumerate(findings):
         out = by_id.get(f"finding-{i}")
@@ -324,5 +313,7 @@ def run_triage_batch(findings: list[Finding], model: str = DEFAULT_MODEL,
             out = rules.triage(f)
             out["backend"] = "rules_fallback"
             out["error"] = "batch entry errored or expired"
+        else:
+            out = _merge_ai_recommendation(f, out, f"{model} (batch)")
         f.triage = out
     return findings

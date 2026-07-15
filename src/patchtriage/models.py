@@ -13,7 +13,20 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+_ASSET_SSVC_CHOICES = {
+    "system_exposure": {"small", "controlled", "open", "unknown"},
+    "automatable": {"yes", "no", "unknown"},
+    "mission_impact": {
+        "degraded", "mef_support_crippled", "mef_failure",
+        "mission_failure", "unknown",
+    },
+    "safety_impact": {
+        "negligible", "marginal", "critical", "catastrophic", "unknown",
+    },
+}
 
 
 class Severity(str, Enum):
@@ -56,9 +69,26 @@ class Asset(BaseModel):
     internet_exposed: Optional[bool] = None
     reachable: Optional[bool] = None         # vulnerable code path is statically reachable
     runtime_observed: Optional[bool] = None  # component/path observed by eBPF/Falco/OTel
+    # SSVC Deployer context. "unknown" invokes the documented conservative
+    # default and is surfaced for user confirmation rather than hidden.
+    system_exposure: str = "unknown"        # small|controlled|open|unknown
+    automatable: str = "unknown"            # yes|no|unknown
+    mission_impact: str = "unknown"         # degraded|mef_support_crippled|mef_failure|mission_failure|unknown
+    safety_impact: str = "unknown"          # negligible|marginal|critical|catastrophic|unknown
     context_sources: list[str] = Field(default_factory=list)
     owner: str = ""
     context_notes: str = ""
+
+    @field_validator(*_ASSET_SSVC_CHOICES, mode="before")
+    @classmethod
+    def validate_ssvc_context(cls, value, info):
+        if info.field_name == "automatable" and isinstance(value, bool):
+            return "yes" if value else "no"
+        normalized = str(value or "unknown").strip().lower().replace("-", "_")
+        if normalized not in _ASSET_SSVC_CHOICES[info.field_name]:
+            allowed = ", ".join(sorted(_ASSET_SSVC_CHOICES[info.field_name]))
+            raise ValueError(f"{info.field_name} must be one of: {allowed}")
+        return normalized
 
 
 class RawFinding(BaseModel):

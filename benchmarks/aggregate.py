@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """Aggregate benchmark reports into benchmarks/out/BENCHMARKS.md.
 
-Reads every *__report.json produced by run_benchmark.sh, re-evaluates both
-orderings (CVSS-descending vs PatchTriage) at a realistic fixed weekly
-budget, and writes one markdown table plus a plain-language verdict.
+Reads every *__report.json produced by run_benchmark.sh and re-evaluates four
+orderings (CVSS, EPSS, KEV-first, and SSVC) at a fixed review budget.
 
 The budget is a fixed number of findings per system ("what one team
 realistically remediates in a week"), not a percentage: on a system with
 9,000+ findings a 25% budget would be thousands of findings and any ordering
 looks fine. Tight, absolute budgets are where prioritization actually matters.
 
-We report a primary budget and also show that CVSS-ordering barely improves
-even when the budget is doubled — its known-exploited findings are buried
-under hundreds of higher-CVSS ones, so more budget does not rescue it.
+KEV coverage is independent observed-exploitation evidence. SSVC-urgent
+coverage measures whether the ordering preserves the environment-specific
+Immediate and Out-of-Cycle queue; it is not presented as external truth.
 """
 
 from __future__ import annotations
@@ -43,15 +42,33 @@ def _load_systems(out: Path):
 
 
 def _totals(systems, budget):
-    kb = kp = kt = 0
-    eb = ep = 0.0
+    totals = {
+        "kev_cvss": 0, "kev_epss": 0, "kev_kev": 0, "kev_ssvc": 0,
+        "kev_total": 0,
+        "mass_cvss": 0.0, "mass_epss": 0.0, "mass_kev": 0.0,
+        "mass_ssvc": 0.0,
+        "urgent_cvss": 0, "urgent_epss": 0, "urgent_kev": 0,
+        "urgent_ssvc": 0, "urgent_total": 0,
+    }
     per = []
     for image, findings in systems:
         r = evaluate(findings, budgets=[budget])[0]
         per.append((image, len(findings), r))
-        kb += r.kev_baseline; kp += r.kev_patchtriage; kt += r.kev_total
-        eb += r.epss_baseline; ep += r.epss_patchtriage
-    return per, kb, kp, kt, eb, ep
+        totals["kev_cvss"] += r.kev_baseline
+        totals["kev_epss"] += r.kev_epss
+        totals["kev_kev"] += r.kev_kev
+        totals["kev_ssvc"] += r.kev_ssvc
+        totals["kev_total"] += r.kev_total
+        totals["mass_cvss"] += r.epss_baseline
+        totals["mass_epss"] += r.epss_epss
+        totals["mass_kev"] += r.epss_kev
+        totals["mass_ssvc"] += r.epss_ssvc
+        totals["urgent_cvss"] += r.urgent_cvss
+        totals["urgent_epss"] += r.urgent_epss
+        totals["urgent_kev"] += r.urgent_kev
+        totals["urgent_ssvc"] += r.urgent_ssvc
+        totals["urgent_total"] += r.urgent_total
+    return per, totals
 
 
 def main(out_dir: str) -> None:
@@ -61,27 +78,32 @@ def main(out_dir: str) -> None:
         print("no reports found", file=sys.stderr)
         sys.exit(1)
 
-    per, kb, kp, kt, eb, ep = _totals(systems, BUDGET)
-    # tight-budget totals (same reports, stricter budget)
-    _, kb_t, kp_t, kt_t, _, _ = _totals(systems, BUDGET_TIGHT)
+    per, totals = _totals(systems, BUDGET)
+    _, tight = _totals(systems, BUDGET_TIGHT)
 
     total_findings = sum(n for _, n, _ in per)
     total_reviewed = sum(r.k for _, _, r in per)
     review_reduction = (
         100 * (1 - total_reviewed / total_findings) if total_findings else 0.0
     )
-    caught_pct = round(100 * kp / kt) if kt else 0
-    cvss_pct = round(100 * kb / kt) if kt else 0
-    kev_lift = (kp / kb) if kb else None
-    epss_ratio = (ep / eb) if eb else 0.0
+    kev_coverage = (
+        100 * totals["kev_ssvc"] / totals["kev_total"]
+        if totals["kev_total"] else 0.0
+    )
+    urgent_coverage = (
+        100 * totals["urgent_ssvc"] / totals["urgent_total"]
+        if totals["urgent_total"] else 0.0
+    )
 
     lines = [
         "# PatchTriage benchmark results",
         "",
         f"Targets: pinned public container images. Budget k = {BUDGET} "
         "findings per system - what one team can realistically remediate in a "
-        "week (one package upgrade usually closes many findings). Ground "
-        "truth: CISA KEV membership and FIRST EPSS.",
+        "week (one package upgrade usually closes many findings). All targets "
+        "use the documented benchmark SSVC context profile: Open exposure, "
+        "Automatable Yes, MEF Support Crippled mission impact, and Negligible "
+        "safety impact.",
         "",
         "## User outcomes",
         "",
@@ -89,56 +111,52 @@ def main(out_dir: str) -> None:
         "|---|---:|",
         f"| First-pass review queue | **{total_findings:,} -> "
         f"{total_reviewed:,} findings ({review_reduction:.1f}% smaller)** |",
-        f"| Known-exploited coverage | **{kp}/{kt} ({caught_pct}%)** |",
-        f"| Coverage gain over CVSS sort | **+{caught_pct - cvss_pct} "
-        "percentage points** |",
-        f"| Known-exploited lift over CVSS sort | **{kev_lift:.0f}x** |"
-        if kev_lift is not None else
-        "| Known-exploited lift over CVSS sort | **CVSS surfaced none** |",
-        f"| Exploitation-probability mass | **{epss_ratio:.1f}x more** |",
+        f"| Known-exploited coverage in SSVC queue | **{totals['kev_ssvc']}/{totals['kev_total']} ({kev_coverage:.1f}%)** |",
+        f"| Environment-urgent coverage in SSVC queue | **{totals['urgent_ssvc']}/{totals['urgent_total']} ({urgent_coverage:.1f}%)** |",
         "",
-        "| Image | Findings | Budget k | KEV@k CVSS-order | KEV@k PatchTriage "
-        "| EPSS@k CVSS-order | EPSS@k PatchTriage |",
-        "|---|---|---|---|---|---|---|",
+        "| Image | Findings | k | KEV CVSS | KEV EPSS | KEV-first | KEV SSVC | Urgent CVSS | Urgent EPSS | Urgent KEV | Urgent SSVC |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for image, n, r in per:
         lines.append(
-            f"| {image} | {n} | {r.k} "
-            f"| {r.kev_baseline}/{r.kev_total} "
-            f"| **{r.kev_patchtriage}/{r.kev_total}** "
-            f"| {r.epss_baseline} | **{r.epss_patchtriage}** |")
+            f"| {image} | {n} | {r.k} | {r.kev_baseline}/{r.kev_total} "
+            f"| {r.kev_epss}/{r.kev_total} | {r.kev_kev}/{r.kev_total} "
+            f"| **{r.kev_ssvc}/{r.kev_total}** "
+            f"| {r.urgent_cvss}/{r.urgent_total} | {r.urgent_epss}/{r.urgent_total} "
+            f"| {r.urgent_kev}/{r.urgent_total} "
+            f"| **{r.urgent_ssvc}/{r.urgent_total}** |")
     lines += [
-        f"| **Total** | **{total_findings:,}** | **{total_reviewed:,}** | **{kb}/{kt}** | **{kp}/{kt}** "
-        f"| **{eb:.2f}** | **{ep:.2f}** |",
+        f"| **Total** | **{total_findings:,}** | **{total_reviewed:,}** "
+        f"| **{totals['kev_cvss']}/{totals['kev_total']}** "
+        f"| **{totals['kev_epss']}/{totals['kev_total']}** "
+        f"| **{totals['kev_kev']}/{totals['kev_total']}** "
+        f"| **{totals['kev_ssvc']}/{totals['kev_total']}** "
+        f"| **{totals['urgent_cvss']}/{totals['urgent_total']}** "
+        f"| **{totals['urgent_epss']}/{totals['urgent_total']}** "
+        f"| **{totals['urgent_kev']}/{totals['urgent_total']}** "
+        f"| **{totals['urgent_ssvc']}/{totals['urgent_total']}** |",
     ]
 
-    missed_pct = round(100 * (1 - kb / kt)) if kt else 0
-    caught_pct_t = round(100 * kp_t / kt_t) if kt_t else 0
     verdict = [
         "",
         "## What this means",
         "",
         f"* The first-pass queue fell from **{total_findings:,} raw findings "
         f"to {total_reviewed:,} prioritized reviews ({review_reduction:.1f}% "
-        f"smaller)** while surfacing {kp} of the {kt} known-exploited findings.",
-        f"* **{kt} findings across these systems are on the CISA "
-        f"Known-Exploited-Vulnerabilities list** - attackers are using them "
-        f"in the wild right now. Those are the ones you cannot afford to "
-        f"leave outside the patch budget.",
-        f"* Sorting by CVSS (the industry default) put **{kb} of {kt}** of "
-        f"them inside the weekly budget - it **missed {missed_pct}%** of the "
-        f"actively exploited vulnerabilities.",
-        f"* PatchTriage caught **{kp}/{kt} ({caught_pct}%)** with the exact "
-        f"same budget - and **{ep:.1f} vs {eb:.1f}** EPSS mass"
-        + (f" ({epss_ratio:.1f}x more)." if epss_ratio else "."),
-        f"* Doubling is no rescue for CVSS: at the stricter budget of "
-        f"{BUDGET_TIGHT}/system it caught {kb_t}/{kt_t} (PatchTriage "
-        f"{kp_t}/{kt_t}, {caught_pct_t}%); even at {BUDGET}/system CVSS only "
-        f"reaches {kb}/{kt}. Known-exploited CVEs rarely have the top CVSS "
-        f"score, so more budget just buys more high-CVSS noise.",
+        f"smaller)** while preserving {totals['urgent_ssvc']} of "
+        f"{totals['urgent_total']} environment-urgent SSVC decisions.",
+        f"* The SSVC queue surfaced **{totals['kev_ssvc']}/"
+        f"{totals['kev_total']} CISA KEV findings**; compare that with CVSS "
+        f"({totals['kev_cvss']}), EPSS ({totals['kev_epss']}), and an explicit "
+        f"KEV-first baseline ({totals['kev_kev']}).",
+        f"* At the tighter {BUDGET_TIGHT}/system budget, SSVC surfaced "
+        f"{tight['kev_ssvc']}/{tight['kev_total']} KEV findings and "
+        f"{tight['urgent_ssvc']}/{tight['urgent_total']} environment-urgent "
+        "decisions.",
         "",
-        "Ground truth is third-party (CISA KEV membership, FIRST EPSS), so "
-        "the tool is not grading its own homework. Re-run "
+        "CISA KEV membership is third-party evidence. Environment-urgent "
+        "coverage is a self-consistency measure for the stated SSVC profile, "
+        "not independent ground truth. Re-run "
         "`./benchmarks/run_benchmark.sh` to reproduce.",
     ]
     lines += verdict

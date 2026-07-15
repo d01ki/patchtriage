@@ -13,7 +13,7 @@ from ..enrich.clients import enrich, enrich_from_snapshot
 from ..evalcmp import evaluate
 from ..ingest.parsers import load_file
 from ..models import Asset
-from ..plan import build_plan, finding_risk, risk_factors
+from ..plan import build_plan
 from ..presentation import (
     evaluation_outcome,
     priority_basis,
@@ -21,9 +21,31 @@ from ..presentation import (
     priority_evidence,
 )
 from ..report.html import render_html
+from ..ssvc import ssvc_order_key
 from ..triage.audit import audit_all
 from ..triage.engine import get_backend, run_triage
 from .. import targets as tstore
+
+
+def asset_from_target(target: dict) -> Asset:
+    """Build the exact asset context consumed by the SSVC engine.
+
+    Keeping this conversion pure makes it possible to verify that values
+    entered in the GUI reach the decision engine unchanged.
+    """
+    return Asset(
+        identifier=target["name"],
+        kind="sbom" if target.get("source_format") in ("cyclonedx", "spdx") else "host",
+        criticality=target.get("criticality", "unknown"),
+        internet_exposed=target.get("internet_exposed"),
+        reachable=target.get("reachable"),
+        runtime_observed=target.get("runtime_observed"),
+        system_exposure=target.get("system_exposure", "unknown"),
+        automatable=target.get("automatable", "unknown"),
+        mission_impact=target.get("mission_impact", "unknown"),
+        safety_impact=target.get("safety_impact", "unknown"),
+        context_sources=target.get("context_sources") or [],
+    )
 
 
 def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
@@ -39,15 +61,7 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
     if not source:
         raise ValueError("no scan or SBOM attached to this target")
 
-    override = Asset(
-        identifier=target["name"],
-        kind="sbom" if target.get("source_format") in ("cyclonedx", "spdx") else "host",
-        criticality=target.get("criticality", "unknown"),
-        internet_exposed=bool(target.get("internet_exposed")),
-        reachable=target.get("reachable"),
-        runtime_observed=target.get("runtime_observed"),
-        context_sources=target.get("context_sources") or [],
-    )
+    override = asset_from_target(target)
     raw = load_file(source, asset=override)
     findings = dedup(raw)
     if target.get("demo"):
@@ -76,9 +90,12 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
     html = render_html(findings, actions, eval_rows, title=title)
     tstore.report_path(target["id"]).write_text(html, encoding="utf-8")
 
-    counts = {"P1": 0, "P2": 0, "P3": 0, "P4": 0}
+    outcomes = {
+        "immediate": 0, "out_of_cycle": 0, "scheduled": 0, "defer": 0,
+    }
     for f in findings:
-        counts[(f.triage or {}).get("priority", "P4")] += 1
+        decision = ((f.triage or {}).get("ssvc") or {}).get("decision", "defer")
+        outcomes[decision if decision in outcomes else "defer"] += 1
     kev = sum(1 for f in findings if f.enrichment.in_cisa_kev)
     top = actions[0] if actions else None
     top_candidates = [
@@ -89,28 +106,30 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
     ] if top else []
     top_finding_pool = priority_candidates or top_candidates
     top_finding = (
-        max(top_finding_pool, key=finding_risk) if top_finding_pool else None
+        min(top_finding_pool, key=ssvc_order_key) if top_finding_pool else None
     )
     explanation = None
     if top_finding:
         e = top_finding.enrichment
         priority = (top_finding.triage or {}).get("priority", "P4")
         priority_info = priority_definition(priority)
+        ssvc = (top_finding.triage or {}).get("ssvc") or {}
         explanation = {
             "vuln_id": top_finding.vuln_id,
             "package": top_finding.package.name,
-            "priority": priority,
-            "priority_label": priority_info["label"],
-            "priority_description": priority_info["description"],
+            "outcome_label": priority_info["ssvc_outcome"],
+            "outcome_description": priority_info["description"],
             "basis": priority_basis(top_finding),
             "checks": priority_evidence(top_finding),
             "rationale": (top_finding.triage or {}).get("rationale", ""),
+            "ssvc": ssvc,
+            "confidence": ssvc.get("confidence", "low"),
+            "needs_confirmation": ssvc.get("needs_confirmation", []),
             "cvss": e.nvd_cvss_score or top_finding.cvss_score,
             "epss": e.epss_score,
             "kev": e.in_cisa_kev,
             "ransomware": e.kev_ransomware,
             "has_fix": bool(top_finding.package.fixed_version),
-            "factors": risk_factors(top_finding),
             "advisories": [
                 advisory.model_dump(mode="json")
                 for advisory in e.vendor_advisories[:5]
@@ -125,12 +144,23 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
             "kev": {
                 "cvss": row.kev_baseline,
                 "epss": row.kev_epss,
+                "kev": row.kev_kev,
+                "ssvc": row.kev_ssvc,
                 "patchtriage": row.kev_patchtriage,
             },
             "epss_mass": {
                 "cvss": row.epss_baseline,
                 "epss": row.epss_epss,
+                "kev": row.epss_kev,
+                "ssvc": row.epss_ssvc,
                 "patchtriage": row.epss_patchtriage,
+            },
+            "urgent": {
+                "total": row.urgent_total,
+                "cvss": row.urgent_cvss,
+                "epss": row.urgent_epss,
+                "kev": row.urgent_kev,
+                "ssvc": row.urgent_ssvc,
             },
             "outcome": evaluation_outcome(row, len(findings)),
         }
@@ -148,13 +178,19 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         error for finding in findings
         for error in finding.enrichment.vendor_lookup_errors
     })
+    confirmation_fields = sorted({
+        field
+        for finding in findings
+        for field in ((finding.triage or {}).get("ssvc") or {}).get(
+            "needs_confirmation", [])
+    })
 
     return {
         "target_id": target["id"],
         "name": target["name"],
         "url": target.get("url", ""),
         "total": len(findings),
-        "counts": counts,
+        "outcomes": outcomes,
         "kev": kev,
         "vendor_advisories": len(advisory_keys),
         "vendor_sources": vendor_sources_checked,
@@ -164,13 +200,20 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         "audit_flagged": len(audit["flagged"]),
         "audit_rate": round(audit["verified"] / len(findings) * 100, 1)
         if findings else 100.0,
-        "risk_reduced": round(sum(a.risk_reduced for a in actions), 3),
         "top_action": (top.summary if top else ""),
-        "top_priority": (top.top_priority if top else ""),
-        "top_priority_label": (
-            priority_definition(top.top_priority)["label"] if top else ""
-        ),
         "top_deadline_days": (top.deadline_days if top else None),
+        "top_ssvc_decision": (
+            ((top_finding.triage or {}).get("ssvc") or {}).get(
+                "decision_label", "") if top_finding else ""
+        ),
+        "evaluated_context": {
+            "system_exposure": override.system_exposure,
+            "automatable": override.automatable,
+            "mission_impact": override.mission_impact,
+            "safety_impact": override.safety_impact,
+            "context_sources": override.context_sources,
+        },
+        "ssvc_confirmation_fields": confirmation_fields,
         "explanation": explanation,
         "comparison": comparison,
         "demo": bool(target.get("demo")),

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from ..evalcmp import EvalRow
 from ..models import Finding
-from ..plan import Action, finding_risk, risk_factors
+from ..plan import Action
 from ..presentation import (
     PRIORITY_DEFINITIONS,
     evaluation_outcome,
@@ -20,6 +20,7 @@ from ..presentation import (
     priority_definition,
     priority_evidence,
 )
+from ..ssvc import ssvc_order_key
 
 _PRI_COLOR = {"P1": "#DC2626", "P2": "#D97706", "P3": "#2563EB", "P4": "#6B7280"}
 
@@ -68,12 +69,11 @@ def render_html(findings: list[Finding], actions: list[Action],
             if (f.triage or {}).get("priority", "P4") == lead.top_priority
         ]
         lead_pool = priority_candidates or candidates
-        lead_finding = max(lead_pool, key=finding_risk) if lead_pool else None
+        lead_finding = min(lead_pool, key=ssvc_order_key) if lead_pool else None
         if lead_finding:
-            factors = risk_factors(lead_finding)
-            e = lead_finding.enrichment
             priority = (lead_finding.triage or {}).get("priority", "P4")
             priority_info = priority_definition(priority)
+            ssvc = (lead_finding.triage or {}).get("ssvc") or {}
             status_icons = {
                 "confirmed": "✓", "attention": "!",
                 "unknown": "?", "not-observed": "–",
@@ -85,35 +85,37 @@ def render_html(findings: list[Finding], actions: list[Action],
                 f'</span></li>'
                 for check in priority_evidence(lead_finding)
             )
-            likelihood = ("CISA KEV confirmed" if e.in_cisa_kev else
-                          f"EPSS {e.epss_score:.3f}" if e.epss_score is not None
-                          else "EPSS unavailable")
-            context_bits = [lead_finding.asset.criticality]
-            if lead_finding.asset.internet_exposed:
-                context_bits.append("internet-exposed")
-            if lead_finding.asset.reachable:
-                context_bits.append("reachable")
-            if lead_finding.asset.runtime_observed:
-                context_bits.append("runtime-observed")
+            decision_points = "".join(
+                f'<div class="whynode"><span>{_esc(label)}</span>'
+                f'<b>{_esc((ssvc.get(key) or {}).get("label", "Unknown"))}</b>'
+                f'<small>{_esc((ssvc.get(key) or {}).get("confidence", "low"))} '
+                f'confidence · {_esc((ssvc.get(key) or {}).get("source", "missing"))}'
+                f'</small></div>'
+                for key, label in (
+                    ("exploitation", "Exploitation"),
+                    ("system_exposure", "System Exposure"),
+                    ("automatable", "Automatable"),
+                    ("human_impact", "Human Impact"),
+                )
+            )
+            confirmation = ssvc.get("needs_confirmation") or []
+            confirmation_html = (
+                '<p class="confirm">Confirm inferred SSVC inputs: '
+                f'{_esc(", ".join(value.replace("_", " ") for value in confirmation))}. Conservative defaults remain '
+                'active until reviewed.</p>' if confirmation else ""
+            )
             explain_html = f"""
     <section>
-      <h2>Why {_esc(priority)} — {_esc(priority_info['label'])}?</h2>
+      <h2>Why {_esc(ssvc.get('decision_label', priority_info['label']))}?</h2>
       <p class="basis">{_esc(priority_basis(lead_finding))}</p>
-      <p class="lede">The decision path and every supporting signal are shown below. Missing
-      telemetry is marked unknown; it is never treated as proof that a vulnerable path is safe.</p>
+      <p class="lede">The official SSVC Deployer path is the deployment decision. KEV, EPSS,
+      CVSS, reachability, and runtime evidence support its inputs; they do not bypass the tree.</p>
       <div class="whyflow">
-        <div class="whynode"><span>Likelihood</span><b>{_esc(likelihood)}</b>
-          <small>{_esc(factors['likelihood_source'])}</small></div>
-        <div class="whyop">×</div>
-        <div class="whynode"><span>Impact</span><b>CVSS {_esc(e.nvd_cvss_score or lead_finding.cvss_score or 'n/a')}</b>
-          <small>impact factor {_esc(factors['impact'])}</small></div>
-        <div class="whyop">×</div>
-        <div class="whynode"><span>Asset context</span><b>{_esc(' · '.join(context_bits))}</b>
-          <small>weight {_esc(factors['asset_weight'])}</small></div>
-        <div class="whyop">→</div>
-        <div class="whynode decisionnode"><span>{_esc(lead.top_priority)} · {_esc(priority_info['label'])}</span><b>{_esc(lead.summary)}</b>
-          <small>target ≤ {lead.deadline_days} days · risk reduced {lead.risk_reduced:.3f}</small></div>
+        {decision_points}
+        <div class="whynode decisionnode"><span>{_esc(ssvc.get('decision_label', priority_info['label']))}</span><b>{_esc(lead.summary)}</b>
+          <small>SSVC {_esc(ssvc.get('decision_label', 'Unknown'))} · default SLE ≤ {lead.deadline_days} days</small></div>
       </div>
+      {confirmation_html}
       <ul class="evidence">{checks_html}</ul>
     </section>"""
 
@@ -123,25 +125,20 @@ def render_html(findings: list[Finding], actions: list[Action],
         w = (counts[p] / total * 100) if total else 0
         if w:
             spine += (f'<div class="seg" style="width:{w:.1f}%;'
-                      f'background:{_PRI_COLOR[p]}" title="{p}: {counts[p]}"></div>')
+                      f'background:{_PRI_COLOR[p]}" title="{_esc(priority_definition(p)["ssvc_outcome"])}: {counts[p]}"></div>')
 
-    max_risk = max((a.risk_reduced for a in actions), default=1) or 1
     action_rows = ""
     for i, a in enumerate(actions, 1):
-        bar_w = a.risk_reduced / max_risk * 100
         kev_badge = (f'<span class="kev">KEV×{a.kev_count}</span>'
                      if a.kev_count else "")
         action_rows += f"""
         <tr>
           <td class="num">{i}</td>
-          <td><span class="pri" style="background:{_PRI_COLOR[a.top_priority]}">{a.top_priority}</span>
-              <span class="prilabel">{_esc(priority_definition(a.top_priority)['label'])}</span></td>
+          <td><span class="pri" style="background:{_PRI_COLOR[a.top_priority]}">{_esc(priority_definition(a.top_priority)['ssvc_outcome'])}</span></td>
           <td class="mono">{_esc(a.summary)} {kev_badge}
               <div class="cves">{_esc(", ".join(a.cves[:6]))}{" …" if len(a.cves) > 6 else ""}</div></td>
           <td class="num">{len(a.cves)}</td>
           <td class="num">{a.deadline_days}d</td>
-          <td class="riskcell"><div class="riskbar" style="width:{bar_w:.0f}%"></div>
-              <span class="riskval">{a.risk_reduced:.2f}</span></td>
         </tr>"""
 
     advisory_rows = ""
@@ -200,7 +197,7 @@ def render_html(findings: list[Finding], actions: list[Action],
   </section>"""
 
     finding_rows = ""
-    ordered = sorted(findings, key=finding_risk, reverse=True)
+    ordered = sorted(findings, key=ssvc_order_key)
     for f in ordered:
         t, e = f.triage or {}, f.enrichment
         p = t.get("priority", "P4")
@@ -215,8 +212,7 @@ def render_html(findings: list[Finding], actions: list[Action],
                 advisory_badges.append(_esc(label))
         finding_rows += f"""
         <tr>
-          <td><span class="pri" style="background:{_PRI_COLOR.get(p, '#6B7280')}">{p}</span>
-              <span class="prilabel">{_esc(priority_definition(p)['label'])}</span></td>
+          <td><span class="pri" style="background:{_PRI_COLOR.get(p, '#6B7280')}">{_esc(priority_definition(p)['ssvc_outcome'])}</span></td>
           <td class="mono">{_esc(f.vuln_id)}</td>
           <td class="mono">{_esc(f.package.name)} {_esc(f.package.version)}</td>
           <td class="num">{e.nvd_cvss_score or f.cvss_score or "–"}</td>
@@ -232,44 +228,49 @@ def render_html(findings: list[Finding], actions: list[Action],
     if eval_rows:
         body = ""
         for r in eval_rows:
-            best_kev = max(r.kev_baseline, r.kev_epss, r.kev_patchtriage)
-            best_epss = max(r.epss_baseline, r.epss_epss, r.epss_patchtriage)
+            best_kev = max(r.kev_baseline, r.kev_epss, r.kev_kev, r.kev_ssvc)
+            best_urgent = max(
+                r.urgent_cvss, r.urgent_epss, r.urgent_kev, r.urgent_ssvc
+            )
             body += f"""
             <tr><td class="num">top {r.k}</td>
                 <td class="num {'win' if r.kev_baseline == best_kev else ''}">{r.kev_baseline}/{r.kev_total}</td>
                 <td class="num {'win' if r.kev_epss == best_kev else ''}">{r.kev_epss}/{r.kev_total}</td>
-                <td class="num {'win' if r.kev_patchtriage == best_kev else ''}">{r.kev_patchtriage}/{r.kev_total}</td>
-                <td class="num {'win' if r.epss_baseline == best_epss else ''}">{r.epss_baseline}</td>
-                <td class="num {'win' if r.epss_epss == best_epss else ''}">{r.epss_epss}</td>
-                <td class="num {'win' if r.epss_patchtriage == best_epss else ''}">{r.epss_patchtriage}</td></tr>"""
+                <td class="num {'win' if r.kev_kev == best_kev else ''}">{r.kev_kev}/{r.kev_total}</td>
+                <td class="num {'win' if r.kev_ssvc == best_kev else ''}">{r.kev_ssvc}/{r.kev_total}</td>
+                <td class="num {'win' if r.urgent_cvss == best_urgent else ''}">{r.urgent_cvss}/{r.urgent_total}</td>
+                <td class="num {'win' if r.urgent_epss == best_urgent else ''}">{r.urgent_epss}/{r.urgent_total}</td>
+                <td class="num {'win' if r.urgent_kev == best_urgent else ''}">{r.urgent_kev}/{r.urgent_total}</td>
+                <td class="num {'win' if r.urgent_ssvc == best_urgent else ''}">{r.urgent_ssvc}/{r.urgent_total}</td></tr>"""
         lead_eval = eval_rows[0]
         outcome = evaluation_outcome(lead_eval, total)
         coverage = (f"{outcome['kev_coverage_pct']:.1f}%"
                     if lead_eval.kev_total else "n/a")
-        gain = (f"+{outcome['kev_gain_points']:.1f} points"
-                if lead_eval.kev_total else "n/a")
+        urgent_coverage = (f"{outcome['urgent_coverage_pct']:.1f}%"
+                           if lead_eval.urgent_total else "n/a")
         eval_html = f"""
     <section>
       <h2>Outcome at a top-{lead_eval.k} review budget</h2>
       <div class="outcomecards">
         <div class="outcard"><b>{outcome['review_reduction_pct']:.1f}%</b><span>smaller first-pass queue</span><small>{outcome['reviewed']} of {total} findings reviewed first</small></div>
-        <div class="outcard"><b>{coverage}</b><span>known-exploited coverage</span><small>{lead_eval.kev_patchtriage} of {lead_eval.kev_total} CISA KEV findings surfaced</small></div>
-        <div class="outcard"><b>{gain}</b><span>coverage versus CVSS sort</span><small>{outcome['additional_kev_vs_cvss']} additional known-exploited findings</small></div>
+        <div class="outcard"><b>{coverage}</b><span>known-exploited coverage</span><small>{lead_eval.kev_ssvc} of {lead_eval.kev_total} CISA KEV findings surfaced</small></div>
+        <div class="outcard"><b>{urgent_coverage}</b><span>context-urgent coverage</span><small>{lead_eval.urgent_ssvc} of {lead_eval.urgent_total} SSVC Immediate or Out-of-Cycle findings surfaced</small></div>
       </div>
-      <h2>Does this beat sorting by CVSS or EPSS alone?</h2>
-      <p class="lede">Same findings, three orderings, fixed work budget k. The EPSS-only
-      baseline directly tests the strongest simple alternative. Metrics are grounded in third-party
-      data (CISA KEV, FIRST EPSS) — the tool cannot grade its own homework.</p>
+      <h2>What changes when environment context decides?</h2>
+      <p class="lede">Same findings and fixed work budget k, compared across CVSS, EPSS,
+      KEV-first, and SSVC orderings. CISA KEV is independent observed-exploitation evidence.
+      “SSVC urgent” measures coverage of this inventory's Immediate and Out-of-Cycle decisions;
+      it is a context-consistency measure, not independent ground truth.</p>
       <table>
-        <thead><tr><th>Budget</th><th>KEV — CVSS</th><th>KEV — EPSS</th><th>KEV — PatchTriage</th>
-        <th>EPSS mass — CVSS</th><th>EPSS mass — EPSS</th><th>EPSS mass — PatchTriage</th></tr></thead>
+        <thead><tr><th>Budget</th><th>KEV · CVSS</th><th>KEV · EPSS</th><th>KEV · KEV-first</th><th>KEV · SSVC</th>
+        <th>Urgent · CVSS</th><th>Urgent · EPSS</th><th>Urgent · KEV-first</th><th>Urgent · SSVC</th></tr></thead>
         <tbody>{body}</tbody>
       </table>
     </section>"""
 
     priority_guide = "".join(
         f'<div class="guideitem"><span class="pri" style="background:{_PRI_COLOR[code]}">'
-        f'{code}</span><div><b>{_esc(info["label"])}</b>'
+        f'{_esc(info["ssvc_outcome"])}</span><div>'
         f'<small>{_esc(info["description"])} Typical window: {_esc(info["window"])}.</small>'
         f'</div></div>'
         for code, info in PRIORITY_DEFINITIONS.items()
@@ -336,17 +337,12 @@ def render_html(findings: list[Finding], actions: list[Action],
   .kev {{ background:#DC2626; color:#fff; font-size:11px; font-weight:700;
           padding:1px 6px; border-radius:3px; margin-left:6px; }}
   .cves {{ color:var(--muted); font-size:12px; margin-top:3px; }}
-  .riskcell {{ min-width:180px; position:relative; }}
-  .riskbar {{ height:12px; background:linear-gradient(90deg,#6366F1,#4338CA);
-              border-radius:2px; display:inline-block; min-width:2px; }}
-  .riskval {{ font-family:ui-monospace, Menlo, monospace; font-size:12px;
-              margin-left:8px; color:var(--muted); }}
   .small {{ font-size:12px; color:var(--muted); }}
   .warnings {{ background:#FFF7ED; border:1px solid #FED7AA; color:#9A3412;
                border-radius:6px; padding:12px 30px; }}
   .basis {{ max-width:84ch; background:#EEF0FF; border-left:4px solid var(--accent);
             color:#293277; border-radius:4px; padding:10px 13px; font-weight:650; }}
-  .whyflow {{ display:grid; grid-template-columns:1fr 28px 1fr 28px 1fr 28px 1.35fr;
+  .whyflow {{ display:grid; grid-template-columns:repeat(4,1fr) 1.35fr;
               gap:7px; align-items:stretch; }}
   .whynode {{ background:#fff; border:1px solid var(--rule); border-radius:5px;
               padding:13px 14px; }}
@@ -356,6 +352,8 @@ def render_html(findings: list[Finding], actions: list[Action],
   .whynode small {{ color:var(--muted); }}
   .whyop {{ display:flex; align-items:center; justify-content:center; color:#8992A1; }}
   .decisionnode {{ background:#EEF0FF; border-color:#BFC5FF; }}
+  .confirm {{ background:#FFF7ED; border:1px solid #FED7AA; color:#9A3412;
+              border-radius:5px; padding:9px 12px; font-size:12px; }}
   .evidence {{ list-style:none; padding:0; margin:10px 0 0; display:grid;
                grid-template-columns:repeat(5,1fr); gap:7px; }}
   .evidence li {{ background:#fff; border:1px solid var(--rule); border-radius:5px;
@@ -387,26 +385,27 @@ def render_html(findings: list[Finding], actions: list[Action],
 </header>
 <div class="spinewrap">
   <div class="spine">{spine}</div>
-  <div class="legend">P1 Patch Immediately {counts['P1']} · P2 Patch Next {counts['P2']} · P3 Schedule Patch {counts['P3']} · P4 Monitor / Defer {counts['P4']}</div>
+  <div class="legend">Immediate {counts['P1']} · Out-of-Cycle {counts['P2']} · Scheduled {counts['P3']} · Defer {counts['P4']}</div>
 </div>
 <main>
   <div class="cards">
-    <div class="card"><div class="v" style="color:#DC2626">{counts['P1']}</div><div class="l">P1 · Patch Immediately</div></div>
+    <div class="card"><div class="v" style="color:#DC2626">{counts['P1']}</div><div class="l">Immediate decisions</div></div>
     <div class="card"><div class="v">{kev_n}</div><div class="l">exploited in the wild</div></div>
     <div class="card"><div class="v">{advisory_n}</div><div class="l">vendor advisories</div></div>
     <div class="card"><div class="v">{len(actions)}</div><div class="l">actions close everything</div></div>
     <div class="card"><div class="v">{total}</div><div class="l">unique findings</div></div>
   </div>
-  <div class="priorityguide" aria-label="Priority meanings">{priority_guide}</div>
+  <div class="priorityguide" aria-label="SSVC outcome meanings">{priority_guide}</div>
 
   {explain_html}
 
   <section>
-    <h2>Remediation plan — highest risk reduced first</h2>
-    <p class="lede">One action often closes many findings. Work top-down: each row is a single
-    concrete change, sized by how much measured risk it removes.</p>
+    <h2>Remediation plan — SSVC deployment outcome first</h2>
+    <p class="lede">SSVC determines action timing from exploitation, exposure,
+    automatable spread, and human impact. One action often closes many findings;
+    CVSS and EPSS remain visible as evidence, never as a proprietary score.</p>
     <table>
-      <thead><tr><th>#</th><th>Priority</th><th>Action</th><th>CVEs</th><th>Due</th><th>Risk reduced</th></tr></thead>
+      <thead><tr><th>#</th><th>SSVC outcome</th><th>Action</th><th>CVEs</th><th>Due</th></tr></thead>
       <tbody>{action_rows}</tbody>
     </table>
   </section>
@@ -416,11 +415,11 @@ def render_html(findings: list[Finding], actions: list[Action],
   <section>
     <h2>All findings</h2>
     <table>
-      <thead><tr><th>Priority</th><th>CVE</th><th>Package</th><th>CVSS</th><th>EPSS</th>
+      <thead><tr><th>SSVC outcome</th><th>CVE</th><th>Package</th><th>CVSS</th><th>EPSS</th>
       <th>KEV</th><th>Vendor evidence</th><th>Action</th><th>Asset</th><th>Rationale</th></tr></thead>
       <tbody>{finding_rows}</tbody>
     </table>
   </section>
 </main>
-<footer>PatchTriage · signals: FIRST EPSS · CISA KEV · NVD{_esc(' · ' + ' · '.join(s.upper() for s in vendor_sources) if vendor_sources else '')} · decisions are auditable against signals</footer>
+<footer>PatchTriage · decision model: CERT/CC SSVC Deployer · signals: FIRST EPSS · CISA KEV · NVD{_esc(' · ' + ' · '.join(s.upper() for s in vendor_sources) if vendor_sources else '')} · decisions are auditable against the SSVC path</footer>
 </body></html>"""

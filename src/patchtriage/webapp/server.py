@@ -13,7 +13,7 @@ import re
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib import metadata, resources
+from importlib import resources
 from urllib.parse import urlsplit
 
 from .. import targets as tstore
@@ -142,15 +142,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/config":
             has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
             backends = ["rules"] + (["claude", "cascade"] if has_key else [])
-            try:
-                version = metadata.version("patchtriage")
-            except metadata.PackageNotFoundError:
-                version = "dev"
             return self._send_json({
                 "backends": backends,
                 "has_key": has_key,
-                "version": version,
-                "capabilities": ["offline-demo", "epss-baseline",
+                "capabilities": ["offline-demo", "ssvc-deployer",
+                                 "epss-baseline", "kev-baseline",
                                  "reachability", "runtime-context",
                                  "vendor-advisories"],
                 "connectors": {
@@ -181,11 +177,15 @@ class Handler(BaseHTTPRequestHandler):
             )
             created = existing is None
             target = existing or tstore.add_target(
-                name="Arsenal live demo",
+                name="Demo",
                 criticality="critical",
                 internet_exposed=True,
                 reachable=True,
                 runtime_observed=True,
+                system_exposure="open",
+                automatable="yes",
+                mission_impact="mef_failure",
+                safety_impact="critical",
                 context_sources=["OpenTelemetry", "Falco"],
                 demo=True,
             )
@@ -204,14 +204,36 @@ class Handler(BaseHTTPRequestHandler):
                 t = tstore.add_target(
                     name=body["name"], url=body.get("url", ""),
                     criticality=body.get("criticality", "unknown"),
-                    internet_exposed=body.get("internet_exposed", False),
+                    internet_exposed=body.get("internet_exposed"),
                     reachable=body.get("reachable"),
                     runtime_observed=body.get("runtime_observed"),
+                    system_exposure=body.get("system_exposure", "unknown"),
+                    automatable=body.get("automatable", "unknown"),
+                    mission_impact=body.get("mission_impact", "unknown"),
+                    safety_impact=body.get("safety_impact", "unknown"),
                     context_sources=body.get("context_sources"),
                 )
             except ValueError as exc:
                 return self._send_json({"error": str(exc)}, 400)
             return self._send_json(t, 201)
+
+        m = re.fullmatch(r"/api/targets/([0-9a-f]{12})/context", path)
+        if m:
+            if not tstore.get_target(m.group(1)):
+                return self._send_json({"error": "no such target"}, 404)
+            body = self._read_json()
+            allowed = {
+                "criticality", "internet_exposed", "reachable",
+                "runtime_observed", "system_exposure", "automatable",
+                "mission_impact", "safety_impact", "context_sources",
+            }
+            try:
+                target = tstore.update_target(
+                    m.group(1), **{key: value for key, value in body.items()
+                                  if key in allowed})
+            except ValueError as exc:
+                return self._send_json({"error": str(exc)}, 400)
+            return self._send_json(target)
 
         m = re.fullmatch(r"/api/targets/([0-9a-f]{12})/source", path)
         if m:

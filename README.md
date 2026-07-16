@@ -3,6 +3,7 @@
 [![CI](https://github.com/d01ki/patchtriage/actions/workflows/ci.yml/badge.svg)](https://github.com/d01ki/patchtriage/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![Decision model: CERT/CC SSVC Deployer](https://img.shields.io/badge/decision-CERT%2FCC%20SSVC%20Deployer-5b5bd6.svg)](https://certcc.github.io/SSVC/howto/deployer_tree/)
 
 PatchTriage turns scanner evidence into environment-specific patch deployment
 decisions. It ingests vulnerability scans or SBOMs, deduplicates findings,
@@ -15,6 +16,31 @@ outcomes: **Immediate**, **Out-of-Cycle**, **Scheduled**, or **Defer**.
 > AI never chooses the SSVC outcome and never invents a score. Optional AI
 > backends can improve explanations and remediation guidance only. Every
 > result is checked again by the deterministic engine.
+
+## Why PatchTriage uses SSVC
+
+PatchTriage is an **SSVC-first patch deployment decision tool**. It implements
+the published CERT/CC Deployer decision model (`ssvc:DT_DP:1.0.0`) rather than
+inventing a proprietary risk score. For every finding, the engine records the
+four decision points that determine deployment timing:
+
+```text
+Exploitation + System Exposure + Automatable + Human Impact
+                              |
+                              v
+           Defer / Scheduled / Out-of-Cycle / Immediate
+```
+
+Mission Impact and Safety Impact are combined through the published Human
+Impact table. CISA KEV can establish `Exploitation = Active`, but it does not
+bypass the SSVC tree; EPSS and CVSS remain visible supporting evidence instead
+of silently becoming a new score. Unknown inputs use the official conservative
+defaults and are flagged for confirmation.
+
+The implementation is checked offline against all **72 Deployer paths** and
+all **16 Human Impact combinations** with `patchtriage verify`. See the
+[reviewer validation protocol](docs/VALIDATION.md) and the
+[complete Japanese system design and technical specification](docs/PATCHTRIAGE_SYSTEM_DESIGN_JA.md).
 
 ![PatchTriage demo](docs/demo.gif)
 

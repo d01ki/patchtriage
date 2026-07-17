@@ -356,8 +356,8 @@ def test_full_run_over_sbom(server):
         pytest.skip(f"OSV unreachable: {summary}")
     assert summary["total"] > 0
     assert summary["report_url"] == f"/report/{t['id']}"
-    # report is now fetchable
-    with urllib.request.urlopen(server + f"/report/{t['id']}") as r:
+    # report is now fetchable within the same anonymous browser session
+    with _OPENERS[server].open(server + f"/report/{t['id']}") as r:
         html = r.read().decode()
     assert "<!doctype html>" in html
     assert "1E3A31" not in html  # no green in the redesigned palette

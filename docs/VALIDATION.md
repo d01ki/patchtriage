@@ -53,8 +53,9 @@ backend. Only the target context is changed:
 | Controlled, MEF Failure, Critical safety | Out-of-Cycle |
 | Small, Degraded mission, Negligible safety | Scheduled |
 
-Automatable is held constant and derived per vulnerability from the same frozen
-CVSS evidence; it is not a target-wide GUI input. If target input is ignored,
+Automatable is held constant by the same official conservative `Yes` default
+because the frozen evidence has no CVSS v4 `AU` value; it is not a target-wide
+GUI input. If target input is ignored,
 this test cannot pass: the three findings have the same vulnerability and
 threat evidence but must produce three different published SSVC paths. Each row
 in the JSON evidence records both

@@ -9,14 +9,17 @@ import socket
 import threading
 import urllib.error
 import urllib.request
+from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
 from patchtriage.webapp.server import Handler
 
 FIX = Path(__file__).parent / "fixtures"
+_OPENERS = {}
 
 
 def _free_port():
@@ -36,23 +39,38 @@ def server(tmp_path, monkeypatch):
     port = _free_port()
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{port}"
+    base = f"http://127.0.0.1:{port}"
+    _OPENERS.pop(base, None)
+    yield base
+    _OPENERS.pop(base, None)
     httpd.shutdown()
     httpd.server_close()
 
 
-def _req(method, url, body=None, headers=None):
+def _new_opener():
+    return urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(CookieJar()))
+
+
+def _request(opener, method, url, body=None, headers=None):
     data = json.dumps(body).encode() if body is not None else None
     request_headers = {"Content-Type": "application/json"}
     request_headers.update(headers or {})
     req = urllib.request.Request(url, data=data, method=method,
                                  headers=request_headers)
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with opener.open(req, timeout=60) as r:
             raw = r.read()
             return r.status, (json.loads(raw) if raw else None)
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read())
+
+
+def _req(method, url, body=None, headers=None):
+    parsed = urlsplit(url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    opener = _OPENERS.setdefault(base, _new_opener())
+    return _request(opener, method, url, body, headers)
 
 
 def test_config_lists_rules_backend(server):
@@ -64,6 +82,8 @@ def test_config_lists_rules_backend(server):
     assert "ssvc-deployer" in cfg["capabilities"]
     assert "kev-baseline" in cfg["capabilities"]
     assert "vendor-advisories" in cfg["capabilities"]
+    assert cfg["data_isolation"] == "anonymous-session"
+    assert cfg["retention_hours"] == 6
     assert cfg["connectors"] == {
         "msrc": "public", "rhsa": "public", "usn": "public",
         "debian": "public", "ghsa": "public-rate-limit",
@@ -95,6 +115,18 @@ def test_add_and_delete_target(server):
     assert targets == []
 
 
+def test_anonymous_browser_sessions_are_isolated(server):
+    first = _new_opener()
+    second = _new_opener()
+    status, target = _request(
+        first, "POST", server + "/api/targets", {"name": "private-target"})
+    assert status == 201
+    _, first_targets = _request(first, "GET", server + "/api/targets")
+    _, second_targets = _request(second, "GET", server + "/api/targets")
+    assert [item["id"] for item in first_targets] == [target["id"]]
+    assert second_targets == []
+
+
 def test_rejects_unsafe_target_url(server):
     status, response = _req(
         "POST", server + "/api/targets",
@@ -119,6 +151,8 @@ def test_security_headers_are_present(server):
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
         assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+        assert "HttpOnly" in response.headers["Set-Cookie"]
+        assert "SameSite=Strict" in response.headers["Set-Cookie"]
     assert "Run the offline demo" in page
     assert "Patch what matters" in page
     assert "Severity informs. Your environment decides." in page
@@ -126,8 +160,10 @@ def test_security_headers_are_present(server):
     assert "Attach scan / SBOM" in page
     assert "CycloneDX / SPDX SBOM" in page
     assert "Categorical outcome — no aggregate SSVC score" in page
-    assert "Automatable is evaluated separately for each vulnerability" in page
+    assert "Automatable are evaluated" in page
     assert 'id="f-automatable"' not in page
+    assert "Context evidence sources" not in page
+    assert "Review vulnerability-specific SSVC inputs" in page
     assert "Black Hat" not in page
     assert "Arsenal" not in page
     assert "LOCAL DECISION ENGINE" not in page
@@ -242,12 +278,12 @@ def test_offline_demo_runs_end_to_end(server):
         "total": 1, "cvss": 0, "epss": 1, "kev": 1, "ssvc": 1,
     }
     assert summary["outcomes"] == {
-        "immediate": 0, "out_of_cycle": 1, "scheduled": 2, "defer": 0,
+        "immediate": 1, "out_of_cycle": 0, "scheduled": 2, "defer": 0,
     }
-    assert summary["top_ssvc_decision"] == "Out-of-Cycle"
+    assert summary["top_ssvc_decision"] == "Immediate"
     assert summary["ssvc_confirmation_fields"] == ["automatable"]
-    assert summary["top_deadline_days"] == 14
-    assert summary["explanation"]["outcome_label"] == "Out-of-Cycle"
+    assert summary["top_deadline_days"] == 3
+    assert summary["explanation"]["outcome_label"] == "Immediate"
     assert summary["explanation"]["basis"].startswith(
         "The SSVC Deployer path"
     )
@@ -256,15 +292,49 @@ def test_offline_demo_runs_end_to_end(server):
         "mission_impact": "mef_failure", "safety_impact": "critical",
         "context_sources": ["OpenTelemetry", "Falco"],
     }
-    assert summary["explanation"]["ssvc"]["decision"] == "out_of_cycle"
+    assert summary["explanation"]["ssvc"]["decision"] == "immediate"
     assert summary["explanation"]["checks"][0]["status"] == "confirmed"
     assert summary["explanation"]["ssvc"]["supplemental"]["runtime_observed"] is True
+    assert len(summary["ssvc_inputs"]) == 3
+    assert all("exploitation" in item and "automatable" in item
+               for item in summary["ssvc_inputs"])
     assert summary["duration_ms"] >= 0
     status, same_target = _req("POST", server + "/api/demo", {})
     assert status == 200
     assert same_target["id"] == target["id"]
     _, targets = _req("GET", server + "/api/targets")
     assert len(targets) == 1
+
+
+def test_analyst_can_confirm_per_vulnerability_ssvc_inputs(server):
+    _, target = _req("POST", server + "/api/demo", {})
+    _, first = _req(
+        "POST", server + f"/api/targets/{target['id']}/run",
+        {"backend": "rules"},
+    )
+    finding = first["ssvc_inputs"][0]
+    status, saved = _req(
+        "POST", server + f"/api/targets/{target['id']}/ssvc-inputs",
+        {"inputs": [{
+            "finding_key": finding["finding_key"],
+            "exploitation": "none",
+            "automatable": "no",
+        }]},
+    )
+    assert status == 200
+    assert saved["overrides"] == 1
+    _, rerun = _req(
+        "POST", server + f"/api/targets/{target['id']}/run",
+        {"backend": "rules"},
+    )
+    updated = next(
+        item for item in rerun["ssvc_inputs"]
+        if item["finding_key"] == finding["finding_key"]
+    )
+    assert updated["exploitation"]["value"] == "none"
+    assert updated["automatable"]["value"] == "no"
+    assert updated["exploitation"]["source"] == "analyst-confirmed SSVC input"
+    assert updated["automatable"]["source"] == "analyst-confirmed SSVC input"
 
 
 @pytest.mark.network

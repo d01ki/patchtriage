@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -33,6 +34,7 @@ from . import config as cfgmod
 
 _LOCK = threading.RLock()
 _TARGET_ID = re.compile(r"^[0-9a-f]{12}$")
+_WORKSPACE_ID = re.compile(r"^[0-9a-f]{32}$")
 _CRITICALITIES = {"critical", "high", "medium", "low", "unknown"}
 _SSVC_CHOICES = {
     "system_exposure": {"small", "controlled", "open", "unknown"},
@@ -110,19 +112,36 @@ def _clean_bool(value, field: str, optional: bool = False) -> bool | None:
     return value
 
 
-def targets_dir() -> Path:
-    d = cfgmod.config_dir() / "targets"
+def _clean_workspace_id(workspace_id: str | None) -> str | None:
+    if workspace_id is None:
+        return None
+    value = str(workspace_id)
+    if not _WORKSPACE_ID.fullmatch(value):
+        raise ValueError("invalid workspace id")
+    return value
+
+
+def targets_dir(workspace_id: str | None = None) -> Path:
+    """Return the private target directory for one browser workspace.
+
+    ``None`` preserves the original local/CLI store.  The public GUI passes a
+    cryptographically random workspace id held in an HttpOnly cookie, so two
+    anonymous visitors never read or write the same registry or evidence.
+    """
+    workspace_id = _clean_workspace_id(workspace_id)
+    d = (cfgmod.config_dir() / "targets" if workspace_id is None else
+         cfgmod.config_dir() / "sessions" / workspace_id / "targets")
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def _registry_path() -> Path:
-    return targets_dir() / "targets.json"
+def _registry_path(workspace_id: str | None = None) -> Path:
+    return targets_dir(workspace_id) / "targets.json"
 
 
-def load_targets() -> list[dict]:
+def load_targets(workspace_id: str | None = None) -> list[dict]:
     with _LOCK:
-        p = _registry_path()
+        p = _registry_path(workspace_id)
         if p.exists():
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
@@ -132,9 +151,9 @@ def load_targets() -> list[dict]:
         return []
 
 
-def save_targets(targets: list[dict]) -> None:
+def save_targets(targets: list[dict], workspace_id: str | None = None) -> None:
     with _LOCK:
-        path = _registry_path()
+        path = _registry_path(workspace_id)
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(targets, indent=2), encoding="utf-8")
         tmp.replace(path)
@@ -149,9 +168,10 @@ def add_target(name: str, url: str = "", criticality: str = "unknown",
                mission_impact: str = "unknown",
                safety_impact: str = "unknown",
                context_sources: list[str] | None = None,
-               demo: bool = False) -> dict:
+               demo: bool = False,
+               workspace_id: str | None = None) -> dict:
     with _LOCK:
-        targets = load_targets()
+        targets = load_targets(workspace_id)
         target = {
             "id": uuid.uuid4().hex[:12],
             "name": _clean_name(name),
@@ -168,20 +188,22 @@ def add_target(name: str, url: str = "", criticality: str = "unknown",
             "mission_impact": _clean_ssvc(mission_impact, "mission_impact"),
             "safety_impact": _clean_ssvc(safety_impact, "safety_impact"),
             "context_sources": _clean_sources(context_sources),
+            "ssvc_overrides": {},
             "demo": bool(demo),
             "source_file": "",
             "source_format": "",
             "created_at": time.time(),
         }
         targets.append(target)
-        save_targets(targets)
+        save_targets(targets, workspace_id)
         return target
 
 
-def update_target(target_id: str, **fields) -> dict | None:
+def update_target(target_id: str, workspace_id: str | None = None,
+                  **fields) -> dict | None:
     target_id = _validate_target_id(target_id)
     with _LOCK:
-        targets = load_targets()
+        targets = load_targets(workspace_id)
         for t in targets:
             if t["id"] == target_id:
                 if fields.get("name") is not None:
@@ -201,45 +223,73 @@ def update_target(target_id: str, **fields) -> dict | None:
                 for key in ("source_file", "source_format"):
                     if key in fields and fields[key] is not None:
                         t[key] = str(fields[key])
-                save_targets(targets)
+                if fields.get("ssvc_overrides") is not None:
+                    overrides = fields["ssvc_overrides"]
+                    if not isinstance(overrides, dict) or len(overrides) > 1000:
+                        raise ValueError("ssvc_overrides must be an object")
+                    t["ssvc_overrides"] = overrides
+                save_targets(targets, workspace_id)
                 return t
         return None
 
 
-def delete_target(target_id: str) -> bool:
+def delete_target(target_id: str, workspace_id: str | None = None) -> bool:
     target_id = _validate_target_id(target_id)
     with _LOCK:
-        targets = load_targets()
+        targets = load_targets(workspace_id)
         remaining = [t for t in targets if t["id"] != target_id]
         if len(remaining) == len(targets):
             return False
         # clean up any attached source / report files
         for suffix in ("_source.json", "_report.html"):
-            p = targets_dir() / f"{target_id}{suffix}"
+            p = targets_dir(workspace_id) / f"{target_id}{suffix}"
             p.unlink(missing_ok=True)
-        save_targets(remaining)
+        save_targets(remaining, workspace_id)
         return True
 
 
-def get_target(target_id: str) -> dict | None:
+def get_target(target_id: str, workspace_id: str | None = None) -> dict | None:
     target_id = _validate_target_id(target_id)
-    return next((t for t in load_targets() if t["id"] == target_id), None)
+    return next((t for t in load_targets(workspace_id) if t["id"] == target_id), None)
 
 
-def save_source(target_id: str, content: str, fmt: str = "") -> Path:
+def save_source(target_id: str, content: str, fmt: str = "",
+                workspace_id: str | None = None) -> Path:
     """Persist an uploaded scan/SBOM for a target and link it in the registry."""
     target_id = _validate_target_id(target_id)
     with _LOCK:
-        if get_target(target_id) is None:
+        if get_target(target_id, workspace_id) is None:
             raise KeyError("no such target")
-        path = targets_dir() / f"{target_id}_source.json"
+        path = targets_dir(workspace_id) / f"{target_id}_source.json"
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(content, encoding="utf-8")
         tmp.replace(path)
-        update_target(target_id, source_file=str(path), source_format=fmt)
+        update_target(target_id, workspace_id=workspace_id,
+                      source_file=str(path), source_format=fmt)
         return path
 
 
-def report_path(target_id: str) -> Path:
+def report_path(target_id: str, workspace_id: str | None = None) -> Path:
     target_id = _validate_target_id(target_id)
-    return targets_dir() / f"{target_id}_report.html"
+    return targets_dir(workspace_id) / f"{target_id}_report.html"
+
+
+def cleanup_workspaces(max_age_seconds: int = 6 * 60 * 60) -> int:
+    """Delete expired anonymous GUI workspaces and their uploaded evidence."""
+    root = cfgmod.config_dir() / "sessions"
+    if not root.exists():
+        return 0
+    cutoff = time.time() - max_age_seconds
+    removed = 0
+    with _LOCK:
+        for directory in root.iterdir():
+            if (not directory.is_dir()
+                    or not _WORKSPACE_ID.fullmatch(directory.name)):
+                continue
+            try:
+                if directory.stat().st_mtime < cutoff:
+                    shutil.rmtree(directory)
+                    removed += 1
+            except OSError:
+                continue
+    return removed

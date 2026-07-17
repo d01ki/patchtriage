@@ -137,6 +137,27 @@ _HUMAN_ORDER = (
     HumanImpact.VERY_HIGH,
 )
 
+# Official Human Impact v2.0.2 compound decision table. Keeping all 16 rows
+# explicit avoids accidentally treating the prose summary as a formula.
+_HUMAN_IMPACT_TABLE = {
+    (SafetyImpact.NEGLIGIBLE, MissionImpact.DEGRADED): HumanImpact.LOW,
+    (SafetyImpact.NEGLIGIBLE, MissionImpact.MEF_SUPPORT_CRIPPLED): HumanImpact.LOW,
+    (SafetyImpact.NEGLIGIBLE, MissionImpact.MEF_FAILURE): HumanImpact.MEDIUM,
+    (SafetyImpact.NEGLIGIBLE, MissionImpact.MISSION_FAILURE): HumanImpact.VERY_HIGH,
+    (SafetyImpact.MARGINAL, MissionImpact.DEGRADED): HumanImpact.LOW,
+    (SafetyImpact.MARGINAL, MissionImpact.MEF_SUPPORT_CRIPPLED): HumanImpact.LOW,
+    (SafetyImpact.MARGINAL, MissionImpact.MEF_FAILURE): HumanImpact.MEDIUM,
+    (SafetyImpact.MARGINAL, MissionImpact.MISSION_FAILURE): HumanImpact.VERY_HIGH,
+    (SafetyImpact.CRITICAL, MissionImpact.DEGRADED): HumanImpact.MEDIUM,
+    (SafetyImpact.CRITICAL, MissionImpact.MEF_SUPPORT_CRIPPLED): HumanImpact.HIGH,
+    (SafetyImpact.CRITICAL, MissionImpact.MEF_FAILURE): HumanImpact.HIGH,
+    (SafetyImpact.CRITICAL, MissionImpact.MISSION_FAILURE): HumanImpact.VERY_HIGH,
+    (SafetyImpact.CATASTROPHIC, MissionImpact.DEGRADED): HumanImpact.VERY_HIGH,
+    (SafetyImpact.CATASTROPHIC, MissionImpact.MEF_SUPPORT_CRIPPLED): HumanImpact.VERY_HIGH,
+    (SafetyImpact.CATASTROPHIC, MissionImpact.MEF_FAILURE): HumanImpact.VERY_HIGH,
+    (SafetyImpact.CATASTROPHIC, MissionImpact.MISSION_FAILURE): HumanImpact.VERY_HIGH,
+}
+
 # Official SSVC Deployer decision table, compacted to one four-value row for
 # each Exploitation / Exposure / Automatable path. Values are ordered by Human
 # Impact: Low, Medium, High, Very High.
@@ -229,6 +250,15 @@ def _point(key: str, version: str, value: Enum, confidence: Confidence,
 
 
 def _infer_exploitation(finding: Finding) -> DecisionPoint:
+    explicit = (finding.ssvc_inputs or {}).get("exploitation")
+    if explicit in {value.value for value in Exploitation}:
+        value = Exploitation(explicit)
+        return _point(
+            "E", "1.1.0", value, Confidence.HIGH,
+            "analyst-confirmed SSVC input",
+            [f"Exploitation confirmed as {_LABELS[value.value]}"],
+            inferred=False,
+        )
     e = finding.enrichment
     if e.in_cisa_kev:
         evidence = ["CISA KEV confirms exploitation in the wild"]
@@ -301,6 +331,15 @@ def _cvss_metrics(vector: str) -> dict[str, str]:
 
 
 def _infer_automatable(finding: Finding) -> DecisionPoint:
+    explicit = (finding.ssvc_inputs or {}).get("automatable")
+    if explicit in {value.value for value in Automatable}:
+        value = Automatable(explicit)
+        return _point(
+            "A", "2.0.0", value, Confidence.HIGH,
+            "analyst-confirmed SSVC input",
+            [f"Automatable confirmed as {_LABELS[value.value]}"],
+            inferred=False,
+        )
     asset_value = str(getattr(finding.asset, "automatable", "unknown") or "unknown")
     if asset_value in (Automatable.YES.value, Automatable.NO.value):
         value = Automatable(asset_value)
@@ -318,17 +357,6 @@ def _infer_automatable(finding: Finding) -> DecisionPoint:
             "A", "2.0.0", value, Confidence.HIGH,
             "CVSS v4 Automatable", [f"CVSS vector contains AU:{metrics['AU']}"],
             inferred=True,
-        )
-    required = {"AV": "N", "AC": "L", "PR": "N", "UI": "N"}
-    if all(key in metrics for key in required):
-        automatable = all(metrics[key] == value for key, value in required.items())
-        value = Automatable.YES if automatable else Automatable.NO
-        return _point(
-            "A", "2.0.0", value, Confidence.MEDIUM,
-            "CVSS v3 heuristic",
-            ["CVSS AV/AC/PR/UI metrics indicate " + _LABELS[value.value]],
-            inferred=True,
-            needs_confirmation=True,
         )
     return _point(
         "A", "2.0.0", Automatable.YES, Confidence.LOW,
@@ -397,19 +425,7 @@ def _infer_safety_impact(finding: Finding) -> DecisionPoint:
 def derive_human_impact(mission: MissionImpact,
                         safety: SafetyImpact) -> HumanImpact:
     """Apply the official Human Impact v2.0.2 combination table."""
-    if (safety == SafetyImpact.CATASTROPHIC
-            or mission == MissionImpact.MISSION_FAILURE):
-        return HumanImpact.VERY_HIGH
-    if safety == SafetyImpact.CRITICAL:
-        if mission == MissionImpact.DEGRADED:
-            return HumanImpact.MEDIUM
-        return HumanImpact.HIGH
-    if (safety == SafetyImpact.MARGINAL
-            and mission == MissionImpact.MEF_FAILURE):
-        return HumanImpact.HIGH
-    if mission == MissionImpact.MEF_FAILURE:
-        return HumanImpact.MEDIUM
-    return HumanImpact.LOW
+    return _HUMAN_IMPACT_TABLE[(safety, mission)]
 
 
 def deployer_decision(exploitation: Exploitation,
@@ -478,7 +494,8 @@ def assess(finding: Finding) -> SSVCAssessment:
     )
     rationale = (
         f"SSVC Deployer decision: {path} => {_LABELS[decision.value]}. "
-        f"The default service-level target is {days} days."
+        f"PatchTriage's example service target is {days} days; the SSVC "
+        "standard itself defines the categorical outcome, not this deadline."
     )
     e = finding.enrichment
     return SSVCAssessment(

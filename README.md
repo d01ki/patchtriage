@@ -1,7 +1,7 @@
 # PatchTriage
 
-![Deploy](https://github.com/d01ki/PatchTriage/actions/workflows/deploy.yml/badge.svg)
-[![CI](https://github.com/d01ki/patchtriage/actions/workflows/ci.yml/badge.svg)](https://github.com/d01ki/patchtriage/actions/workflows/ci.yml)
+[![Deploy](https://github.com/d01ki/PatchTriage/actions/workflows/deploy.yml/badge.svg)](https://github.com/d01ki/PatchTriage/actions/workflows/deploy.yml)
+[![CI](https://github.com/d01ki/PatchTriage/actions/workflows/ci.yml/badge.svg)](https://github.com/d01ki/PatchTriage/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 [![Decision model: CERT/CC SSVC Deployer](https://img.shields.io/badge/decision-CERT%2FCC%20SSVC%20Deployer-5b5bd6.svg)](https://certcc.github.io/SSVC/howto/deployer_tree/)
@@ -13,6 +13,8 @@ adds exploitation and vendor evidence, and applies the deterministic
 
 The output is a defensible action queue with one of four plain-language SSVC
 outcomes: **Immediate**, **Out-of-Cycle**, **Scheduled**, or **Defer**.
+
+**Live tool:** [https://patch-triage.com/](https://patch-triage.com/)
 
 > AI never chooses the SSVC outcome and never invents a score. Optional AI
 > backends can improve explanations and remediation guidance only. Every
@@ -40,8 +42,7 @@ defaults and are flagged for confirmation.
 
 The implementation is checked offline against all **72 Deployer paths** and
 all **16 Human Impact combinations** with `patchtriage verify`. See the
-[reviewer validation protocol](docs/VALIDATION.md) and the
-[complete Japanese system design and technical specification](docs/PATCHTRIAGE_SYSTEM_DESIGN_JA.md).
+[reviewer validation protocol](docs/VALIDATION.md).
 
 ![PatchTriage demo](docs/demo.gif)
 
@@ -50,8 +51,8 @@ all **16 Human Impact combinations** with `patchtriage verify`. See the
 Docker is the shortest path to the GUI:
 
 ```bash
-git clone https://github.com/d01ki/patchtriage
-cd patchtriage
+git clone https://github.com/d01ki/PatchTriage
+cd PatchTriage
 ./run.sh
 ```
 
@@ -110,8 +111,10 @@ patchtriage verify      # offline conformance and repeatability proof
 2. Record the target's CERT/CC SSVC context.
 3. Attach vulnerability evidence.
 4. Run the deterministic assessment.
-5. Review the SSVC decision path, supporting signals, confirmation warnings,
-   and package-level remediation action.
+5. Review vulnerability-specific **Exploitation** and **Automatable** values;
+   confirm them when the evidence-derived value or conservative default needs
+   human review, then rerun.
+6. Review the SSVC decision path and package-level remediation action.
 
 The **Attach scan / SBOM** button accepts:
 
@@ -137,26 +140,22 @@ its failure, not the vulnerability itself.
 | System Exposure | How attackers can reach this deployed system | Small, Controlled, Open | Open |
 | Mission Impact | Effect on Mission Essential Functions (MEFs) | Degraded, MEF Support Crippled, MEF Failure, Mission Failure | MEF Support Crippled |
 | Safety Impact | Highest credible harm to people, systems, environment, finances, or well-being | Negligible, Marginal, Critical, Catastrophic | Marginal |
-| Context evidence sources | Where the answers came from, such as a CMDB, service owner, BCP, or safety analysis | Free text provenance | None |
 
 The SSVC engine evaluates the remaining decision points as follows:
 
 - **Exploitation** is derived from authoritative threat evidence. A CISA KEV
-  listing is Active; public exploit evidence can establish Public PoC.
+  listing is Active; public exploit evidence can establish Public PoC. The GUI
+  lets an analyst confirm or replace the value for each finding.
 - **Automatable** is vulnerability-specific. PatchTriage derives it per
-  finding from CVSS v4 `AU`, or from the CVSS v3 attack vector, privileges,
-  user interaction, and complexity when v4 is unavailable. It is intentionally
-  not a target-wide GUI field.
+  finding from CVSS v4 `AU`. If it is unavailable, the official conservative
+  default is Yes and the GUI asks an analyst to confirm or replace the value.
+  It is intentionally not a target-wide field.
 - **Human Impact** is derived by the published CERT/CC table from the target's
   Mission Impact and Safety Impact.
 
 `Unknown` is a PatchTriage capture state, not an additional SSVC value. The
 official conservative default is applied and the inferred field remains
 visibly marked for confirmation.
-
-Reachability and runtime-observation checkboxes are useful supporting evidence,
-but they are not official SSVC Deployer decision points and do not replace the
-published decision path.
 
 Official definitions:
 
@@ -180,6 +179,24 @@ SSVC produces a categorical deployment decision, not a numerical risk score.
 
 The day targets are PatchTriage workflow defaults; they are not additional
 CERT/CC decision values. Organizations should map them to their own policy.
+
+### Where GUI data is stored
+
+The scan/SBOM upload and generated HTML report are processed on the machine
+running PatchTriage and stored under its configuration directory. With Docker
+Compose this is the `config` volume mounted at
+`/home/patchtriage/.config/patchtriage`.
+
+The web GUI assigns each browser a random HttpOnly session cookie. Targets,
+uploads, and reports are stored in a separate server directory for that
+anonymous session, so one visitor cannot list or open another visitor's data.
+Anonymous session data expires after six hours. Decision summaries shown in
+the page live only in that browser tab's memory.
+
+This is anonymous isolation, not user authentication. A person who obtains a
+session cookie can access that session, so the public demo should not receive
+confidential production scans. Use the local Docker deployment or add an
+authentication proxy when assessing sensitive assets.
 
 ### Why Scheduled has no SSVC score
 
@@ -216,7 +233,7 @@ why severity alone is not the deployment decision:
 
 | SSVC outcome | Vulnerability | Package | CVSS | EPSS | CISA KEV |
 |---|---|---|---:|---:|---|
-| Out-of-Cycle | CVE-2023-4911 | libc6 | 7.8 | 0.856 | Yes |
+| Immediate | CVE-2023-4911 | libc6 | 7.8 | 0.856 | Yes |
 | Scheduled | CVE-2024-3094 | xz-utils | 10.0 | 0.372 | No |
 | Scheduled | CVE-2021-23337 | lodash | 7.2 | 0.018 | No |
 
@@ -262,10 +279,6 @@ assets:
     system_exposure: open
     mission_impact: mef_failure
     safety_impact: critical
-    reachable: true
-    runtime_observed: true
-    context_sources: [CMDB, service-owner, BCP]
-    owner: platform-team
 ```
 
 Generate inputs with scanners you already use:
@@ -366,15 +379,11 @@ service, bind explicitly and supply its assigned port:
 patchtriage serve --host 0.0.0.0 --port 8765 --no-browser
 ```
 
-On Render, create a **Web Service** and set the start command to:
-
-```bash
-patchtriage serve --host 0.0.0.0 --port $PORT --no-browser
-```
-
 Do not use `patchtriage demo` as a web-service start command: it writes a
-report and exits, so no port remains open. Place any internet-facing instance
-behind the access controls appropriate for vulnerability and asset data.
+report and exits, so no port remains open. The production demo at
+[patch-triage.com](https://patch-triage.com/) runs the same container entry
+point on AWS Lightsail. Place any non-demo internet-facing instance behind the
+access controls appropriate for vulnerability and asset data.
 
 ## Limits
 

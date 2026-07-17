@@ -14,8 +14,8 @@
 services:
   # Web GUI console: register targets, import scans/SBOMs, browse reports.
   #   docker compose up gui   ->   open http://localhost:8765
-  # Registered targets, uploaded SBOMs and generated reports persist in the
-  # named 'config' volume, so they survive restarts.
+  # Each browser gets an isolated anonymous workspace. Targets, uploaded
+  # evidence, and reports live in the named 'config' volume for six hours.
   gui:
     build: .
     ports:

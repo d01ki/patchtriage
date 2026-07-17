@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import threading
 import webbrowser
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from urllib.parse import urlsplit
@@ -23,6 +25,10 @@ from .page import INDEX_HTML
 from .runner import run_target
 
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
+SESSION_COOKIE = "patchtriage_session"
+SESSION_TTL_SECONDS = 6 * 60 * 60
+_RUN_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_RUN_LOCKS_GUARD = threading.Lock()
 
 
 class RequestError(ValueError):
@@ -39,15 +45,53 @@ def _detect_format(content: str) -> str:
     return is_sbom(data) or sniff_format(data) or ""
 
 
+def _public_target(target: dict | None) -> dict | None:
+    """Return GUI-safe target metadata without server paths or overrides."""
+    if target is None:
+        return None
+    result = dict(target)
+    result["source_file"] = bool(result.get("source_file"))
+    result.pop("ssvc_overrides", None)
+    return result
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "PatchTriage"
 
     # ------------------------------------------------------------ helpers
+    def _workspace(self) -> str:
+        existing = getattr(self, "_workspace_id", None)
+        if existing:
+            return existing
+        value = ""
+        try:
+            cookie = SimpleCookie(self.headers.get("Cookie", ""))
+            morsel = cookie.get(SESSION_COOKIE)
+            value = morsel.value if morsel else ""
+        except CookieError:
+            value = ""
+        if not re.fullmatch(r"[0-9a-f]{32}", value):
+            value = secrets.token_hex(16)
+            tstore.cleanup_workspaces(SESSION_TTL_SECONDS)
+        self._workspace_id = value
+        return value
+
+    def _session_cookie(self) -> str:
+        value = self._workspace()
+        host = self.headers.get("Host", "").split(":", 1)[0].lower()
+        secure = "" if host in {"localhost", "127.0.0.1", "[::1]"} else "; Secure"
+        return (
+            f"{SESSION_COOKIE}={value}; Path=/; Max-Age={SESSION_TTL_SECONDS}; "
+            f"HttpOnly; SameSite=Strict{secure}"
+        )
+
     def _security_headers(self):
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Set-Cookie", self._session_cookie())
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
@@ -136,6 +180,7 @@ class Handler(BaseHTTPRequestHandler):
         self._guard(self._do_DELETE)
 
     def _do_GET(self):
+        workspace = self._workspace()
         path = self.path.split("?", 1)[0]
         if path == "/":
             return self._send(INDEX_HTML.encode("utf-8"))
@@ -149,6 +194,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "epss-baseline", "kev-baseline",
                                  "reachability", "runtime-context",
                                  "vendor-advisories"],
+                "data_isolation": "anonymous-session",
+                "retention_hours": SESSION_TTL_SECONDS // 3600,
                 "connectors": {
                     "msrc": "public", "rhsa": "public", "usn": "public",
                     "debian": "public",
@@ -158,21 +205,26 @@ class Handler(BaseHTTPRequestHandler):
                 },
             })
         if path == "/api/targets":
-            return self._send_json(tstore.load_targets())
+            return self._send_json([
+                _public_target(target)
+                for target in tstore.load_targets(workspace)
+            ])
         m = re.fullmatch(r"/report/([0-9a-f]{12})", path)
         if m:
-            rp = tstore.report_path(m.group(1))
+            rp = tstore.report_path(m.group(1), workspace)
             if rp.exists():
                 return self._send(rp.read_bytes())
             return self._send(b"report not generated yet", status=404)
         return self._send(b"not found", status=404)
 
     def _do_POST(self):
+        workspace = self._workspace()
         path = self.path.split("?", 1)[0]
         if path == "/api/demo":
             self._read_json()
             existing = next(
-                (target for target in tstore.load_targets() if target.get("demo")),
+                (target for target in tstore.load_targets(workspace)
+                 if target.get("demo")),
                 None,
             )
             created = existing is None
@@ -187,13 +239,16 @@ class Handler(BaseHTTPRequestHandler):
                 safety_impact="critical",
                 context_sources=["OpenTelemetry", "Falco"],
                 demo=True,
+                workspace_id=workspace,
             )
             fixture = (resources.files("patchtriage") / "data" / "fixtures"
                        / "trivy_sample.json")
             tstore.save_source(
-                target["id"], fixture.read_text(encoding="utf-8"), "trivy")
-            target = tstore.get_target(target["id"])
-            return self._send_json(target, 201 if created else 200)
+                target["id"], fixture.read_text(encoding="utf-8"), "trivy",
+                workspace_id=workspace)
+            target = tstore.get_target(target["id"], workspace)
+            return self._send_json(
+                _public_target(target), 201 if created else 200)
 
         if path == "/api/targets":
             body = self._read_json()
@@ -210,14 +265,15 @@ class Handler(BaseHTTPRequestHandler):
                     mission_impact=body.get("mission_impact", "unknown"),
                     safety_impact=body.get("safety_impact", "unknown"),
                     context_sources=body.get("context_sources"),
+                    workspace_id=workspace,
                 )
             except ValueError as exc:
                 return self._send_json({"error": str(exc)}, 400)
-            return self._send_json(t, 201)
+            return self._send_json(_public_target(t), 201)
 
         m = re.fullmatch(r"/api/targets/([0-9a-f]{12})/context", path)
         if m:
-            if not tstore.get_target(m.group(1)):
+            if not tstore.get_target(m.group(1), workspace):
                 return self._send_json({"error": "no such target"}, 404)
             body = self._read_json()
             allowed = {
@@ -227,15 +283,55 @@ class Handler(BaseHTTPRequestHandler):
             }
             try:
                 target = tstore.update_target(
-                    m.group(1), **{key: value for key, value in body.items()
-                                  if key in allowed})
+                    m.group(1), workspace_id=workspace,
+                    **{key: value for key, value in body.items()
+                       if key in allowed})
             except ValueError as exc:
                 return self._send_json({"error": str(exc)}, 400)
-            return self._send_json(target)
+            return self._send_json(_public_target(target))
+
+        m = re.fullmatch(r"/api/targets/([0-9a-f]{12})/ssvc-inputs", path)
+        if m:
+            target = tstore.get_target(m.group(1), workspace)
+            if not target:
+                return self._send_json({"error": "no such target"}, 404)
+            body = self._read_json()
+            inputs = body.get("inputs")
+            if not isinstance(inputs, list) or len(inputs) > 1000:
+                return self._send_json(
+                    {"error": "inputs must be a list of at most 1000 items"}, 400)
+            overrides = dict(target.get("ssvc_overrides") or {})
+            for item in inputs:
+                if not isinstance(item, dict):
+                    return self._send_json({"error": "invalid SSVC input"}, 400)
+                key = str(item.get("finding_key") or "")
+                if not key or len(key) > 512:
+                    return self._send_json({"error": "invalid finding key"}, 400)
+                values = {}
+                exploitation = item.get("exploitation", "auto")
+                automatable = item.get("automatable", "auto")
+                if exploitation != "auto":
+                    if exploitation not in {"none", "public_poc", "active"}:
+                        return self._send_json(
+                            {"error": "invalid Exploitation value"}, 400)
+                    values["exploitation"] = exploitation
+                if automatable != "auto":
+                    if automatable not in {"no", "yes"}:
+                        return self._send_json(
+                            {"error": "invalid Automatable value"}, 400)
+                    values["automatable"] = automatable
+                if values:
+                    overrides[key] = values
+                else:
+                    overrides.pop(key, None)
+            target = tstore.update_target(
+                m.group(1), workspace_id=workspace,
+                ssvc_overrides=overrides)
+            return self._send_json({"ok": True, "overrides": len(overrides)})
 
         m = re.fullmatch(r"/api/targets/([0-9a-f]{12})/source", path)
         if m:
-            if not tstore.get_target(m.group(1)):
+            if not tstore.get_target(m.group(1), workspace):
                 return self._send_json({"error": "no such target"}, 404)
             body = self._read_json()
             content = body.get("content", "")
@@ -246,12 +342,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(
                     {"error": "unrecognized file — expected Trivy/Grype/OSV "
                               "JSON or a CycloneDX/SPDX SBOM"}, 400)
-            tstore.save_source(m.group(1), content, fmt)
+            tstore.save_source(m.group(1), content, fmt, workspace)
             return self._send_json({"ok": True, "format": fmt})
 
         m = re.fullmatch(r"/api/targets/([0-9a-f]{12})/run", path)
         if m:
-            target = tstore.get_target(m.group(1))
+            target = tstore.get_target(m.group(1), workspace)
             if not target:
                 return self._send_json({"error": "no such target"}, 404)
             body = self._read_json()
@@ -262,10 +358,15 @@ class Handler(BaseHTTPRequestHandler):
             if backend not in allowed:
                 return self._send_json({"error": "backend is not available"}, 400)
             try:
-                summary = run_target(
-                    target, backend=backend,
-                    use_nvd=bool(os.environ.get("NVD_API_KEY")),
-                    nvd_api_key=os.environ.get("NVD_API_KEY"))
+                with _RUN_LOCKS_GUARD:
+                    run_lock = _RUN_LOCKS.setdefault(
+                        (workspace, target["id"]), threading.Lock())
+                with run_lock:
+                    summary = run_target(
+                        target, backend=backend,
+                        use_nvd=bool(os.environ.get("NVD_API_KEY")),
+                        nvd_api_key=os.environ.get("NVD_API_KEY"),
+                        workspace_id=workspace)
             except Exception as exc:  # surface to the UI, don't 500 blindly
                 return self._send_json(
                     {"error": f"{type(exc).__name__}: {exc}"}, 400)
@@ -274,10 +375,11 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_json({"error": "not found"}, 404)
 
     def _do_DELETE(self):
+        workspace = self._workspace()
         m = re.fullmatch(
             r"/api/targets/([0-9a-f]{12})", self.path.split("?", 1)[0])
         if m:
-            if not tstore.delete_target(m.group(1)):
+            if not tstore.delete_target(m.group(1), workspace):
                 return self._send_json({"error": "no such target"}, 404)
             self.send_response(204)
             self._security_headers()

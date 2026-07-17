@@ -120,7 +120,7 @@ def test_human_impact_combination_table_boundaries():
     ) == HumanImpact.LOW
     assert derive_human_impact(
         MissionImpact.MEF_FAILURE, SafetyImpact.MARGINAL
-    ) == HumanImpact.HIGH
+    ) == HumanImpact.MEDIUM
     assert derive_human_impact(
         MissionImpact.MEF_SUPPORT_CRIPPLED, SafetyImpact.CRITICAL
     ) == HumanImpact.HIGH
@@ -139,7 +139,7 @@ def test_human_impact_table_covers_all_16_official_rows():
         ),
         SafetyImpact.MARGINAL: (
             HumanImpact.LOW, HumanImpact.LOW,
-            HumanImpact.HIGH, HumanImpact.VERY_HIGH,
+            HumanImpact.MEDIUM, HumanImpact.VERY_HIGH,
         ),
         SafetyImpact.CRITICAL: (
             HumanImpact.MEDIUM, HumanImpact.HIGH,
@@ -176,6 +176,18 @@ def test_public_exploit_reference_sets_public_poc():
     finding = _explicit_context(_finding())
     finding.enrichment.exploit_references = ["https://example.test/poc"]
     assert assess(finding).exploitation.value == "public_poc"
+
+
+def test_analyst_confirmed_vulnerability_inputs_take_precedence():
+    finding = _explicit_context(_finding())
+    finding.enrichment.in_cisa_kev = True
+    finding.ssvc_inputs = {"exploitation": "none", "automatable": "no"}
+    result = assess(finding)
+    assert result.exploitation.value == "none"
+    assert result.exploitation.inferred is False
+    assert result.exploitation.source == "analyst-confirmed SSVC input"
+    assert result.automatable.value == "no"
+    assert result.automatable.inferred is False
 
 
 def test_explicit_context_is_high_confidence_and_needs_no_confirmation():

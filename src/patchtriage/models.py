@@ -162,5 +162,9 @@ class Finding(BaseModel):
     first_seen: Optional[datetime] = None
     enrichment: Enrichment = Field(default_factory=Enrichment)
 
+    # Analyst-confirmed, vulnerability-specific SSVC inputs. These remain
+    # separate from scanner/enrichment evidence so provenance stays explicit.
+    ssvc_inputs: dict[str, str] = Field(default_factory=dict)
+
     # Filled by Layer 5 (AI triage) — clearly separated from ground truth above.
     triage: Optional[dict] = None

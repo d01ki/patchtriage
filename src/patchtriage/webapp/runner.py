@@ -52,7 +52,8 @@ def asset_from_target(target: dict) -> Asset:
 
 def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
                nvd_api_key: str | None = None,
-               vendor_sources: str | None = "auto") -> dict:
+               vendor_sources: str | None = "auto",
+               workspace_id: str | None = None) -> dict:
     """Ingest -> enrich -> triage -> plan -> report for one target.
 
     Returns a summary dict and writes the target's HTML report to disk.
@@ -66,6 +67,15 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
     override = asset_from_target(target)
     raw = load_file(source, asset=override)
     findings = dedup(raw)
+    overrides = target.get("ssvc_overrides") or {}
+    for finding in findings:
+        values = overrides.get(finding.key)
+        if isinstance(values, dict):
+            finding.ssvc_inputs = {
+                key: str(value)
+                for key, value in values.items()
+                if key in ("exploitation", "automatable")
+            }
     if not findings:
         pass
     elif target.get("demo"):
@@ -92,7 +102,8 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
 
     title = f"PatchTriage — {target['name']}"
     html = render_html(findings, actions, eval_rows, title=title)
-    tstore.report_path(target["id"]).write_text(html, encoding="utf-8")
+    tstore.report_path(target["id"], workspace_id).write_text(
+        html, encoding="utf-8")
 
     outcomes = {
         "immediate": 0, "out_of_cycle": 0, "scheduled": 0, "defer": 0,
@@ -188,6 +199,23 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         for field in ((finding.triage or {}).get("ssvc") or {}).get(
             "needs_confirmation", [])
     })
+    ssvc_inputs = []
+    for finding in findings:
+        assessment = ((finding.triage or {}).get("ssvc") or {})
+        exploitation = assessment.get("exploitation") or {}
+        automatable = assessment.get("automatable") or {}
+        ssvc_inputs.append({
+            "finding_key": finding.key,
+            "vuln_id": finding.vuln_id,
+            "package": finding.package.name,
+            "exploitation": exploitation,
+            "automatable": automatable,
+            "override": finding.ssvc_inputs,
+            "needs_review": bool(
+                exploitation.get("needs_confirmation")
+                or automatable.get("needs_confirmation")
+            ),
+        })
 
     return {
         "target_id": target["id"],
@@ -227,6 +255,7 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
             if not actions else ""
         ),
         "ssvc_confirmation_fields": confirmation_fields,
+        "ssvc_inputs": ssvc_inputs,
         "explanation": explanation,
         "comparison": comparison,
         "demo": bool(target.get("demo")),

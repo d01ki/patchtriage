@@ -37,7 +37,7 @@
     "mission_order": ["degraded", "mef_support_crippled", "mef_failure", "mission_failure"],
     "rows": [
       {"safety_impact": "negligible", "expected": ["low", "low", "medium", "very_high"]},
-      {"safety_impact": "marginal", "expected": ["low", "low", "high", "very_high"]},
+      {"safety_impact": "marginal", "expected": ["low", "low", "medium", "very_high"]},
       {"safety_impact": "critical", "expected": ["medium", "high", "high", "very_high"]},
       {"safety_impact": "catastrophic", "expected": ["very_high", "very_high", "very_high", "very_high"]}
     ]
@@ -70,7 +70,7 @@
     "needs_confirmation": ["system_exposure", "automatable", "mission_impact", "safety_impact"]
   },
   "demo_expected": {
-    "CVE-2023-4911": "out_of_cycle",
+    "CVE-2023-4911": "immediate",
     "CVE-2024-3094": "scheduled",
     "CVE-2021-23337": "scheduled"
   }

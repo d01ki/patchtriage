@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir --prefix=/install ".[ai]"
 FROM python:3.12-slim
 LABEL org.opencontainers.image.title="PatchTriage" \
       org.opencontainers.image.description="Auditable AI patch triage: deterministic exploitation signals in, machine-verified LLM decisions out" \
-      org.opencontainers.image.source="https://github.com/d01ki/patchtriage" \
+      org.opencontainers.image.source="https://github.com/d01ki/PatchTriage" \
       org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /install /usr/local
 RUN useradd --create-home --uid 1000 patchtriage \

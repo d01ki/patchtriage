@@ -357,7 +357,9 @@ def test_full_run_over_sbom(server):
     assert summary["total"] > 0
     assert summary["report_url"] == f"/report/{t['id']}"
     # report is now fetchable
-    with urllib.request.urlopen(server + f"/report/{t['id']}") as r:
+    # Reports belong to the same anonymous browser session as the API calls.
+    # Reuse its cookie-aware opener instead of starting a new session.
+    with _OPENERS[server].open(server + f"/report/{t['id']}") as r:
         html = r.read().decode()
     assert "<!doctype html>" in html
     assert "1E3A31" not in html  # no green in the redesigned palette

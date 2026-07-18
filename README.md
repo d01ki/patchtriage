@@ -17,8 +17,9 @@ outcomes: **Immediate**, **Out-of-Cycle**, **Scheduled**, or **Defer**.
 **Live tool:** [https://patch-triage.com/](https://patch-triage.com/)
 
 > AI never chooses the SSVC outcome and never invents a score. Optional AI
-> backends can improve explanations and remediation guidance only. Every
-> result is checked again by the deterministic engine.
+> backends can improve explanations and remediation guidance only. Their
+> outcome, action, deadline, numeric claims, and remediation text are checked
+> against the deterministic result and flagged when they conflict.
 
 ## Why PatchTriage uses SSVC
 
@@ -109,14 +110,15 @@ patchtriage verify      # offline conformance and repeatability proof
 
 1. Add a target that represents one deployed system or service.
 2. Record the target's CERT/CC SSVC context.
-3. Attach vulnerability evidence.
-4. Run the deterministic assessment.
+3. Upload vulnerability evidence, or import a public repository.
+4. Run the assessment. The GUI uses a background job so a reverse proxy does
+   not have to hold one long enrichment request open.
 5. Review vulnerability-specific **Exploitation** and **Automatable** values;
    confirm them when the evidence-derived value or conservative default needs
    human review, then rerun.
 6. Review the SSVC decision path and package-level remediation action.
 
-The **Attach scan / SBOM** button accepts:
+The **Upload evidence** button accepts:
 
 - Trivy JSON;
 - Grype JSON;
@@ -128,6 +130,33 @@ Scanner JSON already contains vulnerabilities. An SBOM contains components,
 not vulnerability findings, so PatchTriage resolves its packages through
 [OSV.dev](https://osv.dev) before assessment. That SBOM path therefore needs
 network access; the bundled demo does not.
+
+The **Import repository** button has two acquisition paths behind the same GUI
+and API contract:
+
+- Public `github.com` URLs use GitHub's Dependency Graph SBOM API. Repository
+  code is not cloned or executed. The hosted anonymous importer deliberately
+  uses no service token, so it cannot cross into private repositories.
+- A local deployment may use `GITHUB_TOKEN` or `GH_TOKEN` to import a private
+  GitHub repository that the operator's token can access. The token is read
+  from the local environment and is never accepted in the URL or browser form.
+- The local Docker GUI can also accept public generic HTTPS Git URLs. It clones
+  into a disposable directory with hooks, submodules, LFS, credentials, and
+  interactive prompts disabled, then uses the pinned OSV-Scanner v2 binary in
+  static source-scan mode. A trusted empty scanner configuration prevents the
+  repository from supplying ignore rules. Package managers and repository code
+  are never run.
+- The hosted/public deployment intentionally disables generic cloning and
+  accepts public GitHub SBOM imports only.
+
+Private GitHub repositories are local-token only. Private generic Git hosts,
+SSH/scp URLs, embedded credentials, and `file://` or `git://` URLs are not
+accepted. A GitHub `tree/<ref>` is retained as provenance, but GitHub's SBOM
+endpoint is repository-wide, so the result is marked partial instead of
+claiming a ref-specific scan.
+
+See [Repository import and coverage model](docs/REPOSITORY_IMPORT.md) for the
+support matrix, threat boundary, coverage states, and deployment controls.
 
 ## What target context means
 
@@ -145,7 +174,9 @@ The SSVC engine evaluates the remaining decision points as follows:
 
 - **Exploitation** is derived from authoritative threat evidence. A CISA KEV
   listing is Active; public exploit evidence can establish Public PoC. The GUI
-  lets an analyst confirm or replace the value for each finding.
+  lets an analyst confirm the value for each finding. An analyst input cannot
+  downgrade authoritative CISA KEV Active evidence; a conflicting input is
+  kept visible and flagged for confirmation.
 - **Automatable** is vulnerability-specific. PatchTriage derives it per
   finding from CVSS v4 `AU`. If it is unavailable, the official conservative
   default is Yes and the GUI asks an analyst to confirm or replace the value.
@@ -188,10 +219,11 @@ Compose this is the `config` volume mounted at
 `/home/patchtriage/.config/patchtriage`.
 
 The web GUI assigns each browser a random HttpOnly session cookie. Targets,
-uploads, and reports are stored in a separate server directory for that
+uploads, run summaries, and reports are stored in a separate server directory for that
 anonymous session, so one visitor cannot list or open another visitor's data.
-Anonymous session data expires after six hours. Decision summaries shown in
-the page live only in that browser tab's memory.
+Anonymous session data expires after six hours. Refreshing the page restores
+the latest summary. Changing evidence, target context, or vulnerability-level
+SSVC inputs invalidates the old summary and report before another run.
 
 This is anonymous isolation, not user authentication. A person who obtains a
 session cookie can access that session, so the public demo should not receive
@@ -216,14 +248,23 @@ Inside the same outcome, the SSVC decision points are compared first, followed
 by EPSS and CVSS tie-breakers. No values are added together into a score, and
 no tie-breaker can override the categorical outcome.
 
-### What “No vulnerabilities found” means
+### Zero findings and incomplete coverage
 
-This state means the attached scan contained zero vulnerability records, or an
-attached SBOM resolved to zero known OSV vulnerabilities. It does **not** mean
-an SSVC Defer decision and does not prove that the target is vulnerability-free.
-Confirm that the scan covered the intended artifact, that the file is current,
-and that SBOM package identifiers and versions are complete before relying on
-the result.
+PatchTriage separates these states:
+
+- **No findings reported** means a supplied scanner result contained no
+  vulnerability records, or every queryable SBOM component was checked and no
+  matching OSV record was returned.
+- **Coverage incomplete or bounded** means at least one component lacked a
+  usable package identity/version, an OSV batch/detail request failed, a
+  provider returned no packages, no supported repository manifest was
+  detected, or the original scanner/provider scope could not be independently
+  verified.
+
+Neither state is an SSVC Defer decision or proof that the target is secure.
+Every non-`complete` status is highlighted in both the GUI and downloadable
+HTML report. The result records total, queryable, queried, skipped, and failed
+components so the operator can decide whether the evidence is sufficient.
 
 ## Bundled demo
 
@@ -286,7 +327,7 @@ Generate inputs with scanners you already use:
 ```bash
 trivy image --format json -o trivy.json myorg/web-frontend:1.4
 grype myorg/web-frontend:1.4 -o json > grype.json
-osv-scanner --format json -r ./repo > osv.json
+osv-scanner scan source --format json --recursive ./repo > osv.json
 ```
 
 ## Evidence connectors
@@ -338,9 +379,14 @@ ingest -> deduplicate -> apply target context -> enrich threat/vendor evidence
         -> JSON + self-contained HTML report
 ```
 
-Aliases such as CVE and GHSA are merged conservatively. Evidence provenance is
-retained in the JSON result. The HTML report has no CDN dependency and can be
-opened offline or attached to a review ticket.
+Aliases such as CVE and GHSA are merged conservatively. Correlation keeps the
+package ecosystem, purl namespace, installed version, and asset identity, so
+same-name packages or different installed versions are not silently combined.
+Remediation version ordering handles common SemVer, PEP 440, Maven qualifier,
+and Debian-style forms and retains conflicting candidates instead of
+discarding them. Evidence
+provenance is retained in the JSON result. The HTML report has no CDN
+dependency and can be opened offline or attached to a review ticket.
 
 ## Reproducibility and reviewer verification
 
@@ -355,7 +401,7 @@ The verification command checks:
 
 - all 72 published SSVC Deployer decision-table paths;
 - all 16 published Human Impact combinations;
-- GUI target context reaching the production decision engine unchanged;
+- target-registry context reaching the production decision engine unchanged;
 - conservative handling of unknown context;
 - repeated deterministic decision hashes;
 - the frozen end-to-end ingest-to-audit pipeline;
@@ -385,10 +431,27 @@ report and exits, so no port remains open. The production demo at
 point on AWS Lightsail. Place any non-demo internet-facing instance behind the
 access controls appropriate for vulnerability and asset data.
 
+Use explicit deployment settings behind TLS termination:
+
+```bash
+PATCHTRIAGE_DEPLOYMENT_MODE=public
+PATCHTRIAGE_ALLOW_GENERIC_REPOSITORIES=false
+PATCHTRIAGE_COOKIE_SECURE=true
+PATCHTRIAGE_BUILD_SHA=<deployed-git-sha>
+```
+
+`/api/config` exposes the application version, build SHA, UI schema version,
+repository capabilities, retention, and anonymous-workspace limits. Local and
+hosted deployments serve the same HTML and API; unavailable capabilities are
+reported and disabled rather than implemented as a separate interface.
+
 ## Limits
 
 - PatchTriage does not apply patches.
 - It is not a replacement for a vulnerability scanner.
+- No tool can correctly scan every repository URL or ecosystem. Unsupported,
+  inaccessible, private, or insufficiently described inputs fail explicitly or
+  produce `coverage_incomplete`; they are never presented as a clean result.
 - An empty result is not proof that a target is secure.
 - SSVC depends on accurate organizational context and current threat evidence.
 - The built-in evaluation compares queue orderings on the supplied inventory;

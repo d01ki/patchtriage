@@ -34,13 +34,14 @@ from rich.table import Table
 from . import config as cfgmod
 from .context import apply_context, load_inventory
 from .dedup import dedup
-from .enrich.clients import CACHE_DIR, enrich
+from .enrich.clients import enrich
 from .evalcmp import evaluate
 from .ingest.parsers import load_file
 from .models import Asset
 from .plan import build_plan
 from .presentation import priority_definition
 from .report.html import render_html
+from .ssvc import ssvc_order_key
 from .triage.audit import audit_all
 from .triage.engine import get_backend, run_triage, run_triage_batch
 
@@ -73,7 +74,29 @@ def _pipeline(files, fmt, asset_override, inventory_path, use_nvd, nvd_api_key,
     for f in files:
         with console.status(f"reading {f} "
                             "(SBOMs are resolved online via OSV.dev)..."):
-            parsed = load_file(f, fmt=fmt, asset=asset_override)
+            replace_identity = bool(
+                asset_override and asset_override.identifier)
+            parsed = load_file(
+                f, fmt=fmt,
+                asset=asset_override if replace_identity else None,
+            )
+            if asset_override and not replace_identity:
+                updates = {
+                    key: value for key, value in {
+                        "criticality": asset_override.criticality,
+                        "internet_exposed": asset_override.internet_exposed,
+                        "reachable": asset_override.reachable,
+                        "runtime_observed": asset_override.runtime_observed,
+                        "system_exposure": asset_override.system_exposure,
+                        "automatable": asset_override.automatable,
+                        "mission_impact": asset_override.mission_impact,
+                        "safety_impact": asset_override.safety_impact,
+                    }.items()
+                    if value is not None and value != "unknown"
+                }
+                for raw_finding in parsed:
+                    raw_finding.asset = raw_finding.asset.model_copy(
+                        update=updates)
         console.print(f"[dim]ingested {len(parsed):>5} findings from {f}[/dim]")
         raw += parsed
 
@@ -93,14 +116,18 @@ def _pipeline(files, fmt, asset_override, inventory_path, use_nvd, nvd_api_key,
         enrich(findings, nvd_api_key=nvd_api_key, use_nvd=use_nvd,
                vendor_sources=vendor_sources, github_token=github_token)
 
-    # Layer 5 - triage
-    subset = findings[:limit] if limit else findings
+    # Layer 5 - deterministic SSVC screening comes before --limit. Scanner
+    # severity alone must never exclude a low-CVSS KEV or context-urgent item.
+    rules_backend = get_backend("rules")
+    run_triage(findings, rules_backend, jobs=1)
+    ranked = sorted(findings, key=ssvc_order_key)
+    subset = ranked[:limit] if limit else ranked
     if batch and triage_backend == "claude":
         run_triage_batch(subset, model or "claude-opus-4-8",
                          progress=lambda msg: console.print(f"[dim]{msg}[/dim]"))
-    else:
+    elif triage_backend != "rules":
         backend = get_backend(triage_backend, model, escalation_model)
-        n_jobs = 1 if triage_backend == "rules" else max(1, jobs)
+        n_jobs = max(1, jobs)
         with console.status(f"triaging {len(subset)} findings via "
                             f"'{triage_backend}' ({n_jobs} workers)..."):
             run_triage(subset, backend, jobs=n_jobs)
@@ -209,7 +236,8 @@ def run(
         help="claude only: use the Message Batches API (50% cost, ~1h latency)"),
     output: Optional[Path] = typer.Option(None, "-o", help="Write full JSON report"),
     html: Optional[Path] = typer.Option(None, help="Write self-contained HTML dashboard"),
-    limit: Optional[int] = typer.Option(None, help="Triage only top-N findings"),
+    limit: Optional[int] = typer.Option(
+        None, help="Report top-N after deterministic SSVC screening"),
 ):
     """Ingest -> dedup -> context -> enrich -> triage -> plan -> report."""
     triage = triage or cfgmod.load().get("default_backend") or "rules"
@@ -219,7 +247,7 @@ def run(
             or ssvc_exposure != "unknown" or ssvc_automatable != "unknown"
             or ssvc_mission_impact != "unknown"
             or ssvc_safety_impact != "unknown"):
-        override = Asset(identifier=asset_id or "override", kind="host",
+        override = Asset(identifier=asset_id or "", kind="host",
                          criticality=criticality, internet_exposed=exposed,
                          reachable=reachable,
                          runtime_observed=runtime_observed,

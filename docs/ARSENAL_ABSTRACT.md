@@ -104,7 +104,7 @@ The verification run is offline and checks:
 
 - all 72 CERT/CC SSVC Deployer decision paths;
 - all 16 official Mission Impact / Safety Impact to Human Impact mappings;
-- three target-context scenarios for the same active CVE, proving that GUI
+- three target-context scenarios for the same active CVE, proving that target
   context reaches the production decision engine;
 - explicit conservative handling of unknown context;
 - 300 repeated deterministic decisions when `--repeats 100` is used;
@@ -244,7 +244,7 @@ The submission deliberately avoids three unsupported claims:
 The defensible current claim is:
 
 > PatchTriage conforms to the bundled official SSVC expectations, preserves
-> GUI target context through the production pipeline, produces deterministic
+> target registry context through the production pipeline, produces deterministic
 > decisions for frozen evidence, detects altered decisions, and makes every
 > inference visible for human confirmation.
 

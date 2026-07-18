@@ -57,7 +57,10 @@ class Package(BaseModel):
     version: str = ""
     ecosystem: str = ""          # e.g. debian, alpine, npm, pypi, golang
     purl: str = ""               # package URL if the scanner provides one
-    fixed_version: str = ""      # earliest version that fixes the vuln ("" = no fix yet)
+    fixed_version: str = ""      # applicable confirmed fix ("" = unavailable or unknown)
+    # Conflicting scanner/vendor fix values are retained for safe, auditable
+    # action-level selection instead of being discarded during correlation.
+    fixed_version_candidates: list[str] = Field(default_factory=list)
 
 
 class Asset(BaseModel):
@@ -135,6 +138,14 @@ class Enrichment(BaseModel):
     nvd_cvss_version: str = ""
     cwe_ids: list[str] = Field(default_factory=list)
     exploit_references: list[str] = Field(default_factory=list)
+    # Sources whose exploit-reference lookup completed successfully. This is
+    # deliberately separate from generic enrichment provenance: a timestamp,
+    # EPSS result, or vendor advisory does not prove that public exploit
+    # evidence was searched.
+    exploit_sources_checked: list[str] = Field(default_factory=list)
+    retrieval_status: dict[str, str] = Field(default_factory=dict)
+    retrieval_errors: list[str] = Field(default_factory=list)
+    exploit_lookup_errors: list[str] = Field(default_factory=list)
     vendor_advisories: list[VendorAdvisory] = Field(default_factory=list)
     vendor_sources_checked: list[str] = Field(default_factory=list)
     vendor_lookup_errors: list[str] = Field(default_factory=list)
@@ -143,7 +154,7 @@ class Enrichment(BaseModel):
 
 
 class Finding(BaseModel):
-    """Deduplicated finding: one per (vuln_id, package.name, asset.identifier).
+    """One finding per vulnerability, component identity, and asset.
 
     `reported_by` keeps track of every scanner that saw it, so nothing is lost.
     """

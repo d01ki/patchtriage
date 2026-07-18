@@ -67,7 +67,7 @@
       "safety_impact": "marginal",
       "decision": "scheduled"
     },
-    "needs_confirmation": ["system_exposure", "automatable", "mission_impact", "safety_impact"]
+    "needs_confirmation": ["exploitation", "system_exposure", "automatable", "mission_impact", "safety_impact"]
   },
   "demo_expected": {
     "CVE-2023-4911": "immediate",

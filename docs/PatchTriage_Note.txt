@@ -1,0 +1,241 @@
+PATCHTRIAGE
+BLACK HAT EUROPE 2026 ARSENAL
+
+1. INFO
+
+Project
+PatchTriage
+
+Source Code
+https://github.com/d01ki/PatchTriage
+
+Live Demonstration
+https://patch-triage.com/
+
+License
+Apache License 2.0
+
+
+
+2. PROBLEM AND TECHNICAL CONTRIBUTION
+
+Vulnerability scanners identify vulnerable components, but a scanner result
+does not by itself determine when a particular organization should deploy a
+remediation. CVSS measures technical severity, EPSS estimates the probability
+of future exploitation activity, and CISA KEV records evidence of exploitation
+in the wild. These signals are useful, but none alone represents the deployed
+system's exposure or the organizational consequence of failure.
+
+PatchTriage is an open-source, local-first vulnerability decision engine. It
+transforms scanner or SBOM evidence into deployment actions using the published
+CERT/CC SSVC Deployer model, version ssvc:DT_DP:1.0.0.
+
+The engine returns one of four categorical outcomes:
+
+- Defer
+- Scheduled
+- Out-of-Cycle
+- Immediate
+
+For every outcome, PatchTriage retains the exact decision path, the evidence
+provenance, confidence information, and any values requiring human
+confirmation. It also groups related findings into package upgrades or
+mitigations, so that the output represents remediation work rather than only a
+flat list of CVE identifiers.
+
+PatchTriage does not create a proprietary weighted risk score. CVSS, EPSS,
+CISA KEV, vendor advisories, and fixed-version information remain visible as
+supporting evidence.
+
+
+3. INPUTS AND EVIDENCE SOURCES
+
+PatchTriage accepts vulnerability reports from:
+
+- Trivy JSON
+- Grype JSON
+- osv-scanner JSON
+
+It also accepts component inventories in:
+
+- CycloneDX JSON SBOM
+- SPDX JSON SBOM
+
+Scanner reports already contain vulnerability findings. An SBOM contains
+components rather than vulnerability results, so PatchTriage resolves its
+packages through OSV when that workflow is used. Fresh SBOM resolution requires
+network access. The bundled demonstration does not.
+
+Heterogeneous findings are normalized into a common data model. CVE and GHSA
+aliases are correlated conservatively to avoid presenting the same underlying
+finding multiple times.
+
+Core enrichment uses:
+
+- FIRST EPSS
+- CISA Known Exploited Vulnerabilities
+- NVD, when enabled
+
+Official vendor evidence can be collected from:
+
+- Microsoft MSRC
+- Red Hat Security Advisories
+- Ubuntu Security Notices
+- Debian Security Tracker
+- GitHub Security Advisories
+
+Connector failures are recorded per finding. A failed optional connector does
+not abort the full assessment or silently become positive evidence.
+
+
+4. DETERMINISTIC DECISION PIPELINE
+
+The production pipeline is:
+
+scanner JSON or SBOM
+  -> normalization and deduplication
+  -> deployment context
+  -> threat and vendor evidence
+  -> CERT/CC SSVC Deployer decision
+  -> machine audit
+  -> package-level remediation plan
+  -> JSON and self-contained HTML reports
+
+The SSVC Deployer result is derived from four decision points:
+
+- Exploitation
+- System Exposure
+- Automatable
+- Human Impact
+
+Mission Impact and Safety Impact are combined using the published Human Impact
+table. CISA KEV can establish Exploitation as Active, but it does not bypass
+System Exposure, Automatable, or Human Impact. EPSS remains a predictive signal
+and is never treated as proof of observed exploitation.
+
+Unknown input is a PatchTriage capture state, not an additional SSVC value.
+When required context is unknown, the published conservative default is used
+and the field remains visibly marked for human confirmation.
+
+
+5. OPTIONAL AI AND THE TRUST BOUNDARY
+
+The deterministic SSVC engine computes the deployment outcome before any
+language model is called. Optional AI may improve the human-readable rationale
+and remediation instructions, but it cannot own or modify:
+
+- the SSVC outcome;
+- the operational action;
+- the workflow deadline; or
+- the decision path.
+
+The deterministic fields are restored from engine state after the model
+response. If the AI request fails, that finding falls back to the deterministic
+result. The default rules backend requires no language model at all.
+
+The audit independently recomputes the decision. It rejects an outcome,
+action, deadline, path, or numerical claim that conflicts with the collected
+evidence. This design makes AI an optional presentation layer rather than a
+priority authority.
+
+
+6. FASTEST REPRODUCIBLE REVIEW
+
+Prerequisite: Docker with Docker Compose.
+
+Run:
+
+git clone https://github.com/d01ki/PatchTriage
+cd PatchTriage
+docker compose run --rm demo
+
+The command writes:
+
+./out/demo_report.html
+./out/demo_report.json
+
+Open demo_report.html in a browser. The report is self-contained and has no CDN
+dependency.
+
+To run the local GUI instead:
+
+docker compose up gui
+
+Then open:
+
+http://localhost:8765
+
+The local workflow is recommended for any sensitive evidence. The public site
+is a shared demonstration service and should receive synthetic data only.
+
+
+7. INDEPENDENT VERIFICATION
+
+Prerequisite: Python 3.10 or newer.
+
+Run from a clean checkout:
+
+python -m venv .venv
+python -m pip install -e .
+patchtriage verify --repeats 100 --output verification_report.json
+
+The offline verifier checks:
+
+- all 72 published SSVC Deployer decision-table paths;
+- all 16 Mission Impact and Safety Impact to Human Impact combinations;
+- propagation of GUI target context into the production decision engine;
+- conservative handling of unknown contextual inputs;
+- deterministic repeatability for frozen evidence;
+- identical end-to-end behavior for identical frozen inputs; and
+- detection of altered outcomes, actions, deadlines, and decision paths.
+
+The verification report contains SHA-256 fingerprints for the expectation
+data, frozen inputs, decision-engine source, and resulting decisions. A reviewer
+can run the verifier twice and compare the input and decision fingerprints.
+Timestamps and environment metadata may differ, while the deterministic input
+and decision fingerprints should remain stable.
+
+Detailed protocol:
+https://github.com/d01ki/PatchTriage/blob/main/docs/VALIDATION.md
+
+
+8. TARGET-CONTEXT FALSIFICATION TEST
+
+The verifier includes target-context scenarios that keep the vulnerability,
+package, exploitation evidence, Automatable value, and engine code unchanged.
+Only the deployed target's System Exposure, Mission Impact, and Safety Impact
+are changed.
+
+The same active vulnerability is expected to move between published SSVC
+outcomes under those different contexts. Both the entered context and the
+values consumed by the production engine are written to the evidence report.
+This makes the claim that organizational context affects the decision directly
+testable rather than a user-interface-only feature.
+
+
+9. PROPOSED ARSENAL DEMONSTRATION
+
+The station demonstration is designed as a short loop that can be restarted
+for each attendee:
+
+1. Import a Trivy, Grype, or osv-scanner report, or start the bundled demo.
+2. Show how duplicate scanner records are normalized and correlated.
+3. Compare CVSS-, EPSS-, KEV-, and SSVC-ordered queues.
+4. Inspect exploitation, vendor, and fixed-version evidence for one finding.
+5. Change only System Exposure, Mission Impact, and Safety Impact.
+6. Observe the same vulnerability move between official SSVC outcomes.
+7. Inspect the exact four-node decision path and confirmation requirements.
+8. Open the package-level remediation plan and self-contained HTML report.
+9. Alter a decision field and show the machine audit detecting the change.
+
+An attendee may also bring a supported scanner export or SBOM. The presenter
+will use synthetic or non-confidential evidence on the shared public instance.
+Production or sensitive evidence can be processed locally.
+
+No conference network or API key is required for the bundled demonstration,
+the verifier, or the generated reports. Network access is useful for fresh
+EPSS, KEV, NVD, vendor data, OSV SBOM resolution, the hosted GUI, and optional
+AI explanations, but the core demonstration does not depend on them.
+
+PatchTriage does not prioritize vulnerabilities - it prioritizes remediation
+decisions.

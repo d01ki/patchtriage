@@ -20,7 +20,7 @@ report with seven checks:
 |---|---:|---|
 | Official SSVC Deployer table | 72 | Does every Exploitation / System Exposure / Automatable / Human Impact path match the published Deployer outcome? |
 | Official Human Impact table | 16 | Does every Mission Impact / Safety Impact pair produce the published Human Impact? |
-| GUI target-context sensitivity | 3 | Do the values entered for a target reach the decision engine unchanged, and can context alone change the outcome for the same active CVE? |
+| Target-context mapping sensitivity | 3 | Do registry values reach the decision engine unchanged, and can context alone change the outcome for the same active CVE? |
 | Unknown context | 1 | Are conservative defaults and required confirmations explicit instead of hidden? |
 | Repeatability | `3 × repeats` | Does the same frozen evidence produce one and only one decision hash? |
 | Frozen end-to-end pipeline | 3 findings | Do parse, deduplication, context, enrichment, triage, and audit agree across two complete runs? |

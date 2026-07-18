@@ -8,10 +8,13 @@ registering it in PARSERS.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from functools import cmp_to_key
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 
 from ..models import Asset, Package, RawFinding, Severity
+from ..plan import compare_versions
 
 
 def _prefer_cve(primary: str, aliases: list[str]) -> tuple[str, list[str]]:
@@ -23,6 +26,178 @@ def _prefer_cve(primary: str, aliases: list[str]) -> tuple[str, list[str]]:
         rest = [i for i in ids if i.upper() != canonical]
         return canonical, sorted(set(rest))
     return primary, sorted(set(aliases))
+
+
+def _ecosystem_identity(value: str) -> str:
+    """Normalize common OSV/PURL ecosystem aliases for identity matching."""
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    return {
+        "golang": "go",
+        "go": "go",
+        "pypi": "pypi",
+        "python": "pypi",
+        "npm": "npm",
+        "node": "npm",
+        "node.js": "npm",
+        "nuget": "nuget",
+        "maven": "maven",
+        "rubygems": "rubygems",
+        "gem": "rubygems",
+        "cargo": "crates.io",
+        "crates.io": "crates.io",
+    }.get(normalized, normalized)
+
+
+def _purl_identity(value: str) -> str:
+    """Return a version-independent purl identity for OSV package matching."""
+    purl = str(value or "").strip()
+    if not purl.startswith("pkg:"):
+        return ""
+    main = purl.split("?", 1)[0].split("#", 1)[0]
+    slash = main.find("/")
+    at = main.rfind("@")
+    if at > slash:
+        main = main[:at]
+    # PURL types are case-insensitive. Package names are ecosystem-specific,
+    # but OSV feeds occasionally vary only by case, so casefold is pragmatic.
+    return main.casefold()
+
+
+def _package_value(pkg: Package | dict, name: str) -> str:
+    if isinstance(pkg, dict):
+        return str(pkg.get(name) or "")
+    return str(getattr(pkg, name, "") or "")
+
+
+def _affected_matches_package(affected: dict, pkg: Package | dict,
+                              allow_unqualified: bool) -> bool:
+    affected_pkg = affected.get("package") or {}
+    if not isinstance(affected_pkg, dict) or not affected_pkg:
+        return allow_unqualified
+
+    target_name = _package_value(pkg, "name")
+    target_ecosystem = _ecosystem_identity(_package_value(pkg, "ecosystem"))
+    target_purl = _purl_identity(_package_value(pkg, "purl"))
+    affected_name = str(affected_pkg.get("name") or "")
+    affected_ecosystem = _ecosystem_identity(
+        str(affected_pkg.get("ecosystem") or ""))
+    affected_purl = _purl_identity(str(affected_pkg.get("purl") or ""))
+
+    if affected_purl and target_purl and affected_purl != target_purl:
+        return False
+    if affected_name and target_name and affected_name.casefold() != target_name.casefold():
+        return False
+    if (affected_ecosystem and target_ecosystem
+            and affected_ecosystem != target_ecosystem):
+        return False
+    # If OSV supplies an identity field that the input lacks, do not guess
+    # unless another strong field (purl or name) established the match.
+    if affected_name and not target_name and not (affected_purl and target_purl):
+        return False
+    # Ecosystem equality is a constraint, not package identity: many packages
+    # share it. A name or purl must establish the actual package match.
+    return bool((affected_purl and target_purl) or
+                (affected_name and target_name))
+
+
+def _range_fix_candidates(osv_range: dict, installed: str,
+                          explicitly_affected: bool,
+                          ecosystem: str) -> list[str]:
+    events = osv_range.get("events") or []
+    if not isinstance(events, list):
+        return []
+    range_type = str(osv_range.get("type") or "").upper()
+    all_fixes = [str(e.get("fixed")) for e in events
+                 if isinstance(e, dict) and e.get("fixed")]
+    if not installed:
+        return all_fixes
+    # Git commit ranges are not safely comparable as package versions. An
+    # explicit affected-version list is sufficient evidence to retain a fix.
+    if range_type == "GIT":
+        return all_fixes if explicitly_affected else []
+
+    candidates: list[str] = []
+    introduced: str | None = "0"
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if "introduced" in event:
+            introduced = str(event.get("introduced") or "0")
+            continue
+        if event.get("fixed"):
+            fixed = str(event["fixed"])
+            lower_ok = introduced is not None and (
+                introduced in ("", "0") or
+                compare_versions(installed, introduced, ecosystem) >= 0)
+            upper_ok = compare_versions(installed, fixed, ecosystem) < 0
+            if lower_ok and upper_ok:
+                candidates.append(fixed)
+            # A fixed event closes the current vulnerable interval. A later
+            # introduced event starts a new, independent interval.
+            introduced = None
+            continue
+        if event.get("last_affected") or event.get("limit"):
+            introduced = None
+    return candidates
+
+
+def select_osv_fixed_version(vuln: dict, pkg: Package | dict) -> str:
+    """Choose the applicable OSV fixed version for one package/version.
+
+    Only matching ``affected.package`` entries are considered. Legacy records
+    that omit package identity entirely remain supported, but an unqualified
+    entry is ignored when the same record contains qualified package entries.
+    For disjoint vulnerable intervals, the fix closing the interval containing
+    the installed version is selected instead of the last fix in the record.
+    """
+    affected_entries = [a for a in (vuln.get("affected") or [])
+                        if isinstance(a, dict)]
+    has_qualified = any(isinstance(a.get("package"), dict) and a.get("package")
+                        for a in affected_entries)
+    installed = _package_value(pkg, "version")
+    ecosystem = _ecosystem_identity(_package_value(pkg, "ecosystem"))
+    candidates: list[str] = []
+    for affected in affected_entries:
+        if not _affected_matches_package(affected, pkg, not has_qualified):
+            continue
+        versions = affected.get("versions") or []
+        explicitly_affected = bool(installed and isinstance(versions, list)
+                                   and installed in {str(v) for v in versions})
+        affected_candidates: list[str] = []
+        all_entry_fixes: list[str] = []
+        for osv_range in affected.get("ranges") or []:
+            if isinstance(osv_range, dict):
+                all_entry_fixes.extend(
+                    str(event["fixed"])
+                    for event in (osv_range.get("events") or [])
+                    if isinstance(event, dict) and event.get("fixed")
+                )
+                affected_candidates.extend(_range_fix_candidates(
+                    osv_range, installed, explicitly_affected, ecosystem))
+        # An explicit affected-version list proves vulnerability, but not which
+        # maintenance branch applies. Fall back only when the record exposes a
+        # single unambiguous fix across all ranges.
+        if not affected_candidates and explicitly_affected:
+            unique_entry_fixes = list(dict.fromkeys(all_entry_fixes))
+            if len(unique_entry_fixes) == 1:
+                affected_candidates = unique_entry_fixes
+        candidates.extend(affected_candidates)
+    if not candidates:
+        return ""
+    unique = list(dict.fromkeys(candidates))
+    return min(
+        unique,
+        key=cmp_to_key(
+            lambda left, right: compare_versions(left, right, ecosystem)),
+    )
+
+
+@dataclass
+class LoadResult:
+    """Findings plus source-coverage metadata for completeness decisions."""
+
+    findings: list[RawFinding]
+    coverage: dict[str, Any]
 
 
 # --------------------------------------------------------------------------- Trivy
@@ -124,12 +299,7 @@ def parse_osv(data: dict, default_asset: Asset | None = None) -> Iterator[RawFin
                     if s.get("type", "").startswith("CVSS"):
                         # OSV carries vectors; keep raw score out, NVD enrich will fill it
                         pass
-                fixed = ""
-                for aff in v.get("affected") or []:
-                    for r in aff.get("ranges") or []:
-                        for ev in r.get("events") or []:
-                            if "fixed" in ev:
-                                fixed = ev["fixed"]
+                fixed = select_osv_fixed_version(v, pkg)
                 yield RawFinding(
                     vuln_id=vuln_id,
                     aliases=aliases,
@@ -138,6 +308,7 @@ def parse_osv(data: dict, default_asset: Asset | None = None) -> Iterator[RawFin
                         name=pkg.get("name", ""),
                         version=pkg.get("version", ""),
                         ecosystem=(pkg.get("ecosystem") or "").lower(),
+                        purl=pkg.get("purl", ""),
                         fixed_version=fixed,
                     ),
                     asset=asset,
@@ -163,7 +334,11 @@ def sniff_format(data: dict) -> str | None:
         return "trivy"
     if "matches" in data and "descriptor" in data:
         return "grype"
-    if "results" in data and any("packages" in r for r in data.get("results", []) or [{}]):
+    osv_results = data.get("results")
+    if isinstance(osv_results, list) and (
+            not osv_results
+            or all(isinstance(row, dict) and "packages" in row
+                   for row in osv_results)):
         return "osv"
     return None
 
@@ -175,9 +350,10 @@ def detect_sbom(data: dict) -> str | None:
     return {"cyclonedx": "CycloneDX", "spdx": "SPDX"}.get(kind)
 
 
-def load_file(path: str | Path, fmt: str | None = None,
-              asset: Asset | None = None, progress=None) -> list[RawFinding]:
-    """Load one scanner output OR SBOM file into RawFindings.
+def load_file_with_metadata(path: str | Path, fmt: str | None = None,
+                            asset: Asset | None = None,
+                            progress=None) -> LoadResult:
+    """Load scanner/SBOM evidence and retain explicit coverage metadata.
 
     Scanner JSON (Trivy/Grype/OSV) is parsed offline. SBOMs (CycloneDX / SPDX,
     e.g. the SPDX export GitHub generates) carry no vulnerabilities of their
@@ -190,8 +366,9 @@ def load_file(path: str | Path, fmt: str | None = None,
     sbom_kind = None if fmt in PARSERS else (fmt if fmt in ("cyclonedx", "spdx")
                                              else is_sbom(data))
     if sbom_kind:
-        from .sbom import load_sbom
-        return load_sbom(path, asset=asset, progress=progress)
+        from .sbom import load_sbom_result
+        result = load_sbom_result(path, asset=asset, progress=progress)
+        return LoadResult(result.findings, result.coverage.as_dict())
 
     fmt = fmt or sniff_format(data)
     if fmt not in PARSERS:
@@ -199,4 +376,31 @@ def load_file(path: str | Path, fmt: str | None = None,
             f"Unrecognized format for {path}. Expected Trivy/Grype/OSV "
             f"scanner JSON (one of {sorted(PARSERS)}) or a CycloneDX/SPDX "
             f"SBOM. Pass fmt= to force a scanner format.")
-    return list(PARSERS[fmt](data, asset))
+    findings = list(PARSERS[fmt](data, asset))
+    return LoadResult(findings, {
+        "source_type": f"scanner:{fmt}",
+        "complete": True,
+        "records": len(findings),
+        "errors": [],
+    })
+
+
+def load_file(path: str | Path, fmt: str | None = None,
+              asset: Asset | None = None, progress=None) -> list[RawFinding]:
+    """Backward-compatible findings-only loader.
+
+    New callers that need to distinguish a valid empty result from incomplete
+    source coverage should use :func:`load_file_with_metadata`.
+    """
+    # Preserve the established SBOM dispatch hook and fail closed on incomplete
+    # OSV coverage. Metadata-aware callers can opt into partial results through
+    # load_file_with_metadata and inspect ``coverage["complete"]``.
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    from .sbom import is_sbom
+    sbom_kind = None if fmt in PARSERS else (fmt if fmt in ("cyclonedx", "spdx")
+                                             else is_sbom(data))
+    if sbom_kind:
+        from .sbom import load_sbom
+        return load_sbom(path, asset=asset, progress=progress)
+    return load_file_with_metadata(
+        path, fmt=fmt, asset=asset, progress=progress).findings

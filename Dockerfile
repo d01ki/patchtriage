@@ -11,13 +11,22 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir --prefix=/install ".[ai]"
 
+# Pin the static repository scanner used only by the opt-in local importer.
+# Source scanning reads manifests/lockfiles; PatchTriage never invokes the
+# scanner's remediation command or a package manager on untrusted content.
+FROM ghcr.io/google/osv-scanner:v2.3.8 AS osv-scanner
+
 FROM python:3.12-slim
 LABEL org.opencontainers.image.title="PatchTriage" \
-      org.opencontainers.image.description="Auditable AI patch triage: deterministic exploitation signals in, machine-verified LLM decisions out" \
+      org.opencontainers.image.description="Evidence-driven patch triage with deterministic SSVC decisions and audited AI explanations" \
       org.opencontainers.image.source="https://github.com/d01ki/PatchTriage" \
       org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /install /usr/local
-RUN useradd --create-home --uid 1000 patchtriage \
+COPY --from=osv-scanner /root/osv-scanner /usr/local/bin/osv-scanner
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 1000 patchtriage \
     && mkdir -p /out /work \
        /home/patchtriage/.cache/patchtriage \
        /home/patchtriage/.config/patchtriage \

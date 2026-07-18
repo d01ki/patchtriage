@@ -178,28 +178,48 @@ def test_public_exploit_reference_sets_public_poc():
     assert assess(finding).exploitation.value == "public_poc"
 
 
-def test_analyst_confirmed_vulnerability_inputs_take_precedence():
+def test_cisa_kev_cannot_be_downgraded_by_analyst_input():
     finding = _explicit_context(_finding())
     finding.enrichment.in_cisa_kev = True
     finding.ssvc_inputs = {"exploitation": "none", "automatable": "no"}
     result = assess(finding)
-    assert result.exploitation.value == "none"
-    assert result.exploitation.inferred is False
-    assert result.exploitation.source == "analyst-confirmed SSVC input"
+    assert result.exploitation.value == "active"
+    assert result.exploitation.inferred is True
+    assert result.exploitation.source == "CISA KEV"
+    assert result.exploitation.needs_confirmation is True
+    assert "cannot downgrade" in " ".join(result.exploitation.evidence)
     assert result.automatable.value == "no"
     assert result.automatable.inferred is False
 
 
-def test_explicit_context_is_high_confidence_and_needs_no_confirmation():
+def test_non_kev_analyst_exploitation_input_remains_authoritative():
+    finding = _explicit_context(_finding())
+    finding.ssvc_inputs = {"exploitation": "public_poc"}
+    result = assess(finding)
+    assert result.exploitation.value == "public_poc"
+    assert result.exploitation.inferred is False
+    assert result.exploitation.source == "analyst-confirmed SSVC input"
+
+
+def test_generic_enrichment_timestamp_is_not_exploit_coverage():
     finding = _explicit_context(_finding())
     result = assess(finding)
-    assert result.needs_confirmation == []
-    # Absence of observed exploitation is evidence-backed, but remains medium
-    # confidence; all organization-owned context inputs are high confidence.
-    assert result.confidence.value == "medium"
+    assert result.needs_confirmation == ["exploitation"]
+    assert result.exploitation.confidence.value == "low"
+    assert result.confidence.value == "low"
     assert result.system_exposure.confidence.value == "high"
     assert result.mission_impact.confidence.value == "high"
     assert result.priority == "P3"
+
+
+def test_completed_exploit_source_coverage_supports_medium_confidence_none():
+    finding = _explicit_context(_finding())
+    finding.enrichment.exploit_sources_checked = ["nvd"]
+    result = assess(finding)
+    assert result.exploitation.value == "none"
+    assert result.exploitation.confidence.value == "medium"
+    assert result.exploitation.needs_confirmation is False
+    assert result.needs_confirmation == []
 
 
 def test_unknown_context_uses_visible_conservative_defaults():

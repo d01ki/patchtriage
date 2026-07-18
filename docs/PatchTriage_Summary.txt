@@ -1,0 +1,45 @@
+PATCHTRIAGE
+BLACK HAT EUROPE 2026 ARSENAL
+
+Project: PatchTriage
+License: Apache License 2.0
+
+PatchTriage is an open-source, local-first vulnerability decision engine. It
+helps security teams decide when remediation should be deployed in a specific
+environment. It does not replace vulnerability scanners and does not create a
+proprietary weighted risk score.
+
+The tool accepts Trivy, Grype, and osv-scanner JSON, plus CycloneDX and SPDX
+JSON SBOMs. It normalizes findings, correlates CVE and GHSA aliases, and adds
+supporting evidence from EPSS, CISA KEV, NVD, and official vendor advisories.
+
+PatchTriage implements the published CERT/CC SSVC Deployer model. Its
+deterministic engine evaluates Exploitation, System Exposure, Automatable, and
+Human Impact, then returns one of four outcomes: Defer, Scheduled,
+Out-of-Cycle, or Immediate. Each result includes the decision path, evidence
+provenance, confidence, and fields requiring human confirmation.
+
+Optional AI is outside the decision trust boundary. The deterministic engine
+computes the SSVC outcome before any model is called. AI may improve only the
+human-readable explanation and remediation wording. It cannot modify the
+outcome, action, deadline, or decision path. If an AI request fails, the
+deterministic result is retained.
+
+Findings are grouped by asset and package into upgrades or mitigations. This
+allows one package action to address multiple vulnerability records and turns
+scanner output into a remediation plan rather than another flat CVE list.
+
+The public repository includes an offline verifier covering all 72 SSVC
+Deployer paths, all 16 Human Impact combinations, target-context propagation,conservative handling of unknown inputs, deterministic repeatability,end-to-end behavior, and detection of inconsistent decision fields.
+
+The Arsenal demonstration is hands-on. Attendees can import a supported report
+or use the bundled evidence, inspect the decision path, change only the target
+environment, compare prioritization methods, and generate a package-oriented
+remediation report. .
+
+PatchTriage does not scan systems, apply patches, analyze source-code patch
+diffs, or claim that an empty result proves an asset is secure. Important
+context and evidence-derived assumptions remain subject to human review.
+
+Source code and full English documentation are provided through the Source
+Code and Tool URL fields in the submission.

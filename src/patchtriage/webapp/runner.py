@@ -7,11 +7,10 @@ import os
 import time
 from importlib import resources
 
-from ..context import apply_context, load_inventory  # noqa: F401 (parity)
 from ..dedup import dedup
 from ..enrich.clients import enrich, enrich_from_snapshot
 from ..evalcmp import evaluate
-from ..ingest.parsers import load_file
+from ..ingest.parsers import load_file_with_metadata
 from ..models import Asset
 from ..plan import build_plan
 from ..presentation import (
@@ -27,6 +26,30 @@ from ..triage.engine import get_backend, run_triage
 from .. import targets as tstore
 
 
+MAX_WEB_SSVC_INPUTS = max(
+    1, int(os.environ.get("PATCHTRIAGE_MAX_WEB_SSVC_INPUTS", 250)))
+
+
+def _combine_coverage(declared: dict, observed: dict,
+                      provider_status: str) -> dict:
+    """Merge coverage without letting one successful parser erase a boundary."""
+    coverage = {**declared, **observed}
+    complete = (
+        observed.get("complete") is True
+        and declared.get("complete") is not False
+        and provider_status in {"", "complete"}
+    )
+    if provider_status and provider_status != "complete":
+        status = provider_status
+    elif complete:
+        status = "complete"
+    else:
+        status = "incomplete"
+    coverage["status"] = status
+    coverage["complete"] = status == "complete"
+    return coverage
+
+
 def asset_from_target(target: dict) -> Asset:
     """Build the exact asset context consumed by the SSVC engine.
 
@@ -37,7 +60,9 @@ def asset_from_target(target: dict) -> Asset:
     """
     return Asset(
         identifier=target["name"],
-        kind="sbom" if target.get("source_format") in ("cyclonedx", "spdx") else "host",
+        kind=("repository" if target.get("source_kind") == "repository" else
+              "sbom" if target.get("source_format") in ("cyclonedx", "spdx")
+              else "host"),
         criticality=target.get("criticality", "unknown"),
         internet_exposed=target.get("internet_exposed"),
         reachable=target.get("reachable"),
@@ -50,7 +75,7 @@ def asset_from_target(target: dict) -> Asset:
     )
 
 
-def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
+def run_target(target: dict, backend: str = "rules", use_nvd: bool = True,
                nvd_api_key: str | None = None,
                vendor_sources: str | None = "auto",
                workspace_id: str | None = None) -> dict:
@@ -60,12 +85,28 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
     Raises ValueError if the target has no attached scan/SBOM.
     """
     started = time.perf_counter()
+    expected_revision = int(target.get("input_revision") or 0)
+    expected_source_sha256 = str(target.get("source_sha256") or "")
     source = target.get("source_file")
     if not source:
         raise ValueError("no scan or SBOM attached to this target")
 
     override = asset_from_target(target)
-    raw = load_file(source, asset=override)
+    loaded = load_file_with_metadata(source, asset=override)
+    raw = loaded.findings
+    source_provenance = dict(target.get("source_provenance") or {})
+    declared_coverage = dict(source_provenance.get("coverage") or {})
+    provider_status = str(source_provenance.get("coverage_status") or "")
+    if not provider_status and target.get("source_kind") in {"", "upload", None}:
+        provider_status = "provider_reported"
+    run_coverage = _combine_coverage(
+        declared_coverage, dict(loaded.coverage or {}), provider_status)
+    status = run_coverage["status"]
+    source_provenance["coverage"] = run_coverage
+    source_provenance["coverage_status"] = status
+    tstore.update_source_provenance_if_current(
+        target["id"], source_provenance, expected_revision,
+        expected_source_sha256, workspace_id)
     findings = dedup(raw)
     overrides = target.get("ssvc_overrides") or {}
     for finding in findings:
@@ -100,11 +141,12 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
     actions = build_plan(findings)
     eval_rows = evaluate(findings)
 
-    title = f"PatchTriage — {target['name']}"
-    html = render_html(findings, actions, eval_rows, title=title)
-    tstore.report_path(target["id"], workspace_id).write_text(
-        html, encoding="utf-8")
-
+    title = f"PatchTriage - {target['name']}"
+    html = render_html(
+        findings, actions, eval_rows, title=title,
+        coverage=run_coverage,
+        coverage_warnings=list(source_provenance.get("warnings") or []),
+    )
     outcomes = {
         "immediate": 0, "out_of_cycle": 0, "scheduled": 0, "defer": 0,
     }
@@ -143,6 +185,8 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
             "cvss": e.nvd_cvss_score or top_finding.cvss_score,
             "epss": e.epss_score,
             "kev": e.in_cisa_kev,
+            "retrieval_status": e.retrieval_status,
+            "retrieval_errors": e.retrieval_errors,
             "ransomware": e.kev_ransomware,
             "has_fix": bool(top_finding.package.fixed_version),
             "advisories": [
@@ -193,17 +237,30 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         error for finding in findings
         for error in finding.enrichment.vendor_lookup_errors
     })
+    enrichment_errors = sorted({
+        error for finding in findings
+        for error in finding.enrichment.retrieval_errors
+    })
     confirmation_fields = sorted({
         field
         for finding in findings
         for field in ((finding.triage or {}).get("ssvc") or {}).get(
             "needs_confirmation", [])
     })
+    ordered_input_findings = sorted(findings, key=ssvc_order_key)
     ssvc_inputs = []
-    for finding in findings:
+    review_total = 0
+    for finding in ordered_input_findings:
         assessment = ((finding.triage or {}).get("ssvc") or {})
         exploitation = assessment.get("exploitation") or {}
         automatable = assessment.get("automatable") or {}
+        needs_review = bool(
+            exploitation.get("needs_confirmation")
+            or automatable.get("needs_confirmation")
+        )
+        review_total += int(needs_review)
+        if len(ssvc_inputs) >= MAX_WEB_SSVC_INPUTS:
+            continue
         ssvc_inputs.append({
             "finding_key": finding.key,
             "vuln_id": finding.vuln_id,
@@ -211,13 +268,17 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
             "exploitation": exploitation,
             "automatable": automatable,
             "override": finding.ssvc_inputs,
-            "needs_review": bool(
-                exploitation.get("needs_confirmation")
-                or automatable.get("needs_confirmation")
-            ),
+            "needs_review": needs_review,
         })
 
-    return {
+    coverage = source_provenance.get("coverage") or {}
+    coverage_status = str(
+        coverage.get("status") or source_provenance.get("coverage_status") or
+        ("complete" if target.get("source_format") not in ("cyclonedx", "spdx")
+         else "unknown")
+    )
+    incomplete = coverage_status != "complete"
+    result = {
         "target_id": target["id"],
         "name": target["name"],
         "url": target.get("url", ""),
@@ -227,6 +288,7 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
         "vendor_advisories": len(advisory_keys),
         "vendor_sources": vendor_sources_checked,
         "vendor_errors": vendor_errors,
+        "enrichment_errors": enrichment_errors,
         "actions": len(actions),
         "audit_verified": audit["verified"],
         "audit_flagged": len(audit["flagged"]),
@@ -245,20 +307,46 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = False,
             "context_sources": override.context_sources,
         },
         "result_state": (
+            "coverage_incomplete" if not findings and incomplete else
             "no_findings" if not findings else
+            "assessed_incomplete" if incomplete and actions else
             "assessed" if actions else "no_plan"
         ),
         "result_message": (
-            "No vulnerabilities were found in the attached scan or SBOM."
+            "No findings were reported, but the evidence scope is only "
+            "provider-reported and was not independently verified."
+            if not findings and coverage_status == "provider_reported" else
+            "No findings were reported, but dependency or selector coverage "
+            "is incomplete."
+            if not findings and incomplete else
+            "The attached evidence reported no vulnerability findings."
             if not findings else
+            "Assessment completed with bounded or incomplete evidence coverage."
+            if incomplete and actions else
             "Assessment completed, but no remediation action could be built."
             if not actions else ""
         ),
+        "source": {
+            "kind": target.get("source_kind") or "upload",
+            "format": target.get("source_format", ""),
+            "name": target.get("source_name", ""),
+            "sha256": target.get("source_sha256", ""),
+            "size": target.get("source_size", 0),
+            "provenance": source_provenance,
+            "coverage_status": coverage_status,
+        },
         "ssvc_confirmation_fields": confirmation_fields,
         "ssvc_inputs": ssvc_inputs,
+        "ssvc_inputs_total": len(ordered_input_findings),
+        "ssvc_inputs_review_total": review_total,
+        "ssvc_inputs_truncated": len(ordered_input_findings) > len(ssvc_inputs),
         "explanation": explanation,
         "comparison": comparison,
         "demo": bool(target.get("demo")),
         "duration_ms": round((time.perf_counter() - started) * 1000),
         "report_url": f"/report/{target['id']}",
     }
+    tstore.save_run_artifacts(
+        target["id"], result, html, expected_revision,
+        expected_source_sha256, workspace_id)
+    return result

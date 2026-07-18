@@ -39,9 +39,27 @@ def _audit_badge(t: dict) -> str:
     return (f'<span title="{flags}" style="color:#D97706;font-weight:700">⚑ </span>')
 
 
+def _kev_display(finding: Finding, compact: bool = False) -> str:
+    enrichment = finding.enrichment
+    if enrichment.in_cisa_kev:
+        if enrichment.retrieval_status.get("kev") == "listed_stale":
+            return "YES*" if compact else "Listed (catalog stale)"
+        return "YES" if compact else "Listed"
+    status = enrichment.retrieval_status.get("kev")
+    if status == "unknown_stale":
+        return "?" if compact else "Unknown (catalog stale)"
+    if status == "failed":
+        return "?" if compact else "Unknown (lookup failed)"
+    if status == "not_listed":
+        return "—" if compact else "Not listed"
+    return "?" if compact else "Not confirmed"
+
+
 def render_html(findings: list[Finding], actions: list[Action],
                 eval_rows: list[EvalRow] | None = None,
-                title: str = "PatchTriage — Situation Report") -> str:
+                title: str = "PatchTriage — Situation Report",
+                coverage: dict | None = None,
+                coverage_warnings: list[str] | None = None) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     counts = {"P1": 0, "P2": 0, "P3": 0, "P4": 0}
     for f in findings:
@@ -59,6 +77,43 @@ def render_html(findings: list[Finding], actions: list[Action],
                              for source in finding.enrichment.vendor_sources_checked})
     vendor_errors = sorted({error for finding in findings
                             for error in finding.enrichment.vendor_lookup_errors})
+    retrieval_errors = sorted({error for finding in findings
+                               for error in finding.enrichment.retrieval_errors})
+    coverage_status = str((coverage or {}).get("status") or "unknown")
+    coverage_limited = coverage is not None and coverage_status != "complete"
+    coverage_html = ""
+    if coverage is not None:
+        coverage_details = []
+        for key, label in (
+            ("total_components", "components"),
+            ("queryable_components", "queryable"),
+            ("queried_components", "queried"),
+            ("failed_components", "failed"),
+            ("records", "records consumed"),
+        ):
+            if coverage.get(key) is not None:
+                coverage_details.append(
+                    f"{_esc(label)}: {_esc(coverage.get(key))}")
+        warnings = list(coverage_warnings or [])
+        warnings.extend(str(error) for error in (coverage.get("errors") or []))
+        warning_html = "".join(
+            f"<li>{_esc(warning)}</li>" for warning in dict.fromkeys(warnings)
+            if warning
+        )
+        boundary = (
+            "The evidence scope is incomplete or provider-reported. A zero "
+            "finding count is not a clean bill of health."
+            if coverage_limited else
+            "The supplied evidence was processed without a recorded coverage "
+            "failure; this still does not prove the target is vulnerability-free."
+        )
+        coverage_html = f"""
+  <section class="{'coveragewarn' if coverage_limited else ''}">
+    <h2>Evidence coverage</h2>
+    <p class="lede"><b>Status: {_esc(coverage_status)}</b> · {_esc(boundary)}</p>
+    {f'<p class="mono small">{" · ".join(coverage_details)}</p>' if coverage_details else ''}
+    {f'<ul class="warnings">{warning_html}</ul>' if warning_html else ''}
+  </section>"""
 
     explain_html = ""
     if actions:
@@ -110,7 +165,7 @@ def render_html(findings: list[Finding], actions: list[Action],
             signal_values = (
                 ("CVSS", f"{cvss:.1f}" if cvss is not None else "Not available"),
                 ("EPSS (30 day)", f"{epss * 100:.1f}%" if epss is not None else "Not available"),
-                ("CISA KEV", "Listed" if enrichment.in_cisa_kev else "Not listed"),
+                ("CISA KEV", _kev_display(lead_finding)),
                 ("Fix", "Available" if lead_finding.package.fixed_version else "Not supplied"),
             )
             signals_html = "".join(
@@ -138,12 +193,21 @@ def render_html(findings: list[Finding], actions: list[Action],
     </section>"""
 
     if not findings:
-        explain_html = """
+        empty_heading = (
+            "No vulnerability findings — evidence coverage is limited"
+            if coverage_limited else "No vulnerability records were reported"
+        )
+        empty_detail = (
+            "At least one provider, component, selector, or scan-scope boundary "
+            "was not complete. Do not interpret this result as a clean target."
+            if coverage_limited else
+            "No SSVC assessment was required. Confirm that the original scan "
+            "covered the intended target and review the evidence coverage below."
+        )
+        explain_html = f"""
     <section class="emptyreport">
-      <h2>No vulnerabilities found in the attached evidence</h2>
-      <p>The scan or resolved SBOM produced zero vulnerability records. This is
-      different from a Defer decision: no SSVC assessment was required. Confirm
-      that the input covers the intended target and rerun after the next scan.</p>
+      <h2>{_esc(empty_heading)}</h2>
+      <p>{_esc(empty_detail)}</p>
     </section>"""
 
     # segmented priority spine
@@ -213,11 +277,16 @@ def render_html(findings: list[Finding], actions: list[Action],
   </section>"""
 
     vendor_error_html = ""
-    if vendor_errors:
-        items = "".join(f"<li>{_esc(error)}</li>" for error in vendor_errors)
+    all_connector_errors = [
+        *(f"Threat evidence: {error}" for error in retrieval_errors),
+        *(f"Vendor evidence: {error}" for error in vendor_errors),
+    ]
+    if all_connector_errors:
+        items = "".join(
+            f"<li>{_esc(error)}</li>" for error in all_connector_errors)
         vendor_error_html = f"""
   <section>
-    <h2>Vendor connector warnings</h2>
+    <h2>Evidence connector warnings</h2>
     <p class="lede">Triage completed using the remaining deterministic
     signals. Retry later to fill these evidence gaps.</p>
     <ul class="warnings">{items}</ul>
@@ -244,7 +313,7 @@ def render_html(findings: list[Finding], actions: list[Action],
           <td class="mono">{_esc(f.package.name)} {_esc(f.package.version)}</td>
           <td class="num">{e.nvd_cvss_score or f.cvss_score or "–"}</td>
           <td class="num">{f"{e.epss_score:.3f}" if e.epss_score is not None else "–"}</td>
-          <td class="num">{"YES" if e.in_cisa_kev else "—"}</td>
+          <td class="num">{_kev_display(f, compact=True)}</td>
           <td class="mono small">{'<br>'.join(advisory_badges) or '—'}</td>
           <td>{_esc(t.get("action", "—"))}</td>
           <td class="mono small">{_esc(f.asset.identifier)}</td>
@@ -367,6 +436,7 @@ def render_html(findings: list[Finding], actions: list[Action],
   .small {{ font-size:12px; color:var(--muted); }}
   .warnings {{ background:#FFF7ED; border:1px solid #FED7AA; color:#9A3412;
                border-radius:6px; padding:12px 30px; }}
+  .coveragewarn {{ border-left:4px solid #D97706; background:#FFFBEB; }}
   .basis {{ max-width:84ch; background:#EEF0FF; border-left:4px solid var(--accent);
             color:#293277; border-radius:4px; padding:10px 13px; font-weight:650; }}
   .whyflow {{ display:grid; grid-template-columns:repeat(4,1fr) 1.35fr;
@@ -434,6 +504,7 @@ def render_html(findings: list[Finding], actions: list[Action],
   <div class="priorityguide" aria-label="SSVC outcome meanings">{priority_guide}</div>
 
   {explain_html}
+  {coverage_html}
 
   <section>
     <h2>Remediation plan — SSVC deployment outcome first</h2>

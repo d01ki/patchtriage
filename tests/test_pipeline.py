@@ -19,6 +19,7 @@ def _load_all():
 def test_sniff_format():
     assert sniff_format(json.loads((FIX / "trivy_sample.json").read_text())) == "trivy"
     assert sniff_format(json.loads((FIX / "grype_sample.json").read_text())) == "grype"
+    assert sniff_format({"results": []}) == "osv"
 
 
 def test_trivy_parse():
@@ -226,9 +227,26 @@ def test_html_report_renders_vendor_evidence():
 
 def test_html_report_explains_empty_input_without_a_false_comparison():
     html = render_html([], [], evaluate([]))
-    assert "No vulnerabilities found in the attached evidence" in html
-    assert "different from a Defer decision" in html
+    assert "No vulnerability records were reported" in html
+    assert "No SSVC assessment was required" in html
     assert "Outcome at a top-" not in html
+
+
+def test_html_report_surfaces_incomplete_coverage_instead_of_clean_result():
+    html = render_html(
+        [], [], evaluate([]),
+        coverage={
+            "status": "incomplete", "complete": False,
+            "total_components": 2, "failed_components": 2,
+            "errors": ["OSV query failed"],
+        },
+        coverage_warnings=["Provider scope could not be verified."],
+    )
+    assert "evidence coverage is limited" in html
+    assert "Status: incomplete" in html
+    assert "OSV query failed" in html
+    assert "Provider scope could not be verified" in html
+    assert "No vulnerabilities found" not in html
 
 
 # ---------------------------------------------------------------- audit layer

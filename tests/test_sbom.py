@@ -7,8 +7,16 @@ OSV vulnerability record onto a RawFinding.
 import json
 from pathlib import Path
 
-from patchtriage.ingest.parsers import detect_sbom, load_file
-from patchtriage.ingest.sbom import (is_sbom, parse_sbom_components,
+import httpx
+import pytest
+
+from patchtriage.ingest.parsers import (detect_sbom, load_file,
+                                        load_file_with_metadata, parse_osv,
+                                        select_osv_fixed_version)
+from patchtriage.ingest.sbom import (_fetch_vuln, _osv_cache_load,
+                                      _osv_cache_save, _query_ids,
+                                      IncompleteOsvCoverageError, is_sbom,
+                                      parse_sbom_components,
                                       raw_from_osv_vuln)
 from patchtriage.models import Asset, Package
 
@@ -82,3 +90,270 @@ def test_load_file_routes_sbom(monkeypatch):
     monkeypatch.setattr(sbom, "load_sbom", fake_load_sbom)
     load_file(FIX / "sbom_spdx.json")
     assert called["path"].endswith("sbom_spdx.json")
+
+
+def test_fixed_version_matches_package_ecosystem_and_installed_range():
+    vuln = {
+        "affected": [
+            {
+                "package": {"name": "widget", "ecosystem": "Maven"},
+                "ranges": [{"type": "ECOSYSTEM", "events": [
+                    {"introduced": "0"}, {"fixed": "99.0"},
+                ]}],
+            },
+            {
+                "package": {"name": "widget", "ecosystem": "npm"},
+                "ranges": [{"type": "SEMVER", "events": [
+                    {"introduced": "0"}, {"fixed": "2.0.0"},
+                    {"introduced": "3.0.0"}, {"fixed": "4.0.0"},
+                ]}],
+            },
+        ],
+    }
+    assert select_osv_fixed_version(
+        vuln, Package(name="widget", ecosystem="npm", version="1.5.0"),
+    ) == "2.0.0"
+    assert select_osv_fixed_version(
+        vuln, Package(name="widget", ecosystem="npm", version="3.2.0"),
+    ) == "4.0.0"
+
+
+def test_fix_selection_treats_rc_as_prerelease_and_never_crosses_branches():
+    vuln = {
+        "affected": [{
+            "package": {"name": "widget", "ecosystem": "npm"},
+            "versions": ["2.0.6rc1"],
+            "ranges": [
+                {"type": "SEMVER", "events": [
+                    {"introduced": "1.9.0"}, {"fixed": "1.9.1"},
+                ]},
+                {"type": "SEMVER", "events": [
+                    {"introduced": "2.0.0"}, {"fixed": "2.0.6"},
+                ]},
+            ],
+        }],
+    }
+    assert select_osv_fixed_version(
+        vuln,
+        Package(name="widget", ecosystem="npm", version="2.0.6rc1"),
+    ) == "2.0.6"
+
+    ambiguous = {
+        "affected": [{
+            "package": {"name": "widget", "ecosystem": "npm"},
+            "versions": ["custom-build"],
+            "ranges": vuln["affected"][0]["ranges"],
+        }],
+    }
+    assert select_osv_fixed_version(
+        ambiguous,
+        Package(name="widget", ecosystem="npm", version="custom-build"),
+    ) == ""
+
+
+def test_parse_osv_reuses_package_specific_fixed_version_selection():
+    data = {"results": [{"source": {"path": "repo"}, "packages": [{
+        "package": {"name": "widget", "ecosystem": "npm",
+                    "version": "10.1.0"},
+        "vulnerabilities": [{
+            "id": "OSV-TEST-1",
+            "affected": [
+                {"package": {"name": "widget", "ecosystem": "PyPI"},
+                 "ranges": [{"events": [{"introduced": "0"},
+                                           {"fixed": "999.0"}]}]},
+                {"package": {"name": "widget", "ecosystem": "npm"},
+                 "ranges": [{"type": "SEMVER", "events": [
+                     {"introduced": "10.0.0"}, {"fixed": "10.2.0"},
+                 ]}]},
+            ],
+        }],
+    }]}]}
+    finding = list(parse_osv(data))[0]
+    assert finding.package.fixed_version == "10.2.0"
+
+
+class _BatchResponse:
+    status_code = 200
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
+class _BatchClient:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def post(self, *args, **kwargs):
+        return _BatchResponse(self.payload)
+
+
+def test_osv_querybatch_short_response_is_incomplete_not_empty_success():
+    packages = [
+        Package(name="one", version="1", ecosystem="npm"),
+        Package(name="two", version="1", ecosystem="npm"),
+    ]
+    result = _query_ids(packages, _BatchClient({"results": [{}]}))
+    assert result.ids == [[], []]
+    assert result.coverage.failed_components == 2
+    assert result.coverage.queried_components == 0
+    assert result.coverage.complete is False
+    assert "2 queries" in result.coverage.errors[0]
+
+
+def test_osv_querybatch_valid_empty_results_are_complete():
+    packages = [
+        Package(name="one", version="1", ecosystem="npm"),
+        Package(name="two", version="1", ecosystem="npm"),
+    ]
+    result = _query_ids(packages, _BatchClient({"results": [{}, {}]}))
+    assert result.ids == [[], []]
+    assert result.coverage.queried_components == 2
+    assert result.coverage.failed_components == 0
+    assert result.coverage.complete is True
+
+
+def test_metadata_loader_distinguishes_complete_empty_sbom(monkeypatch,
+                                                           tmp_path):
+    class ContextClient(_BatchClient):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    import patchtriage.ingest.sbom as sbom
+    monkeypatch.setenv("PATCHTRIAGE_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        sbom.httpx, "Client",
+        lambda **kwargs: ContextClient({"results": [{}, {}]}),
+    )
+    result = load_file_with_metadata(FIX / "sbom_spdx.json")
+    assert result.findings == []
+    assert result.coverage["complete"] is True
+    assert result.coverage["queried_components"] == 2
+
+
+def test_legacy_loader_fails_closed_on_incomplete_osv_batch(monkeypatch,
+                                                            tmp_path):
+    class ContextClient(_BatchClient):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    import patchtriage.ingest.sbom as sbom
+    monkeypatch.setenv("PATCHTRIAGE_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        sbom.httpx, "Client",
+        lambda **kwargs: ContextClient({"results": [{}]}),
+    )
+    with pytest.raises(IncompleteOsvCoverageError) as exc:
+        load_file(FIX / "sbom_spdx.json")
+    assert exc.value.coverage.failed_components == 2
+
+
+def test_osv_coverage_counts_versionless_unqueryable_components():
+    packages = [Package(name="no-version", ecosystem="npm",
+                        purl="pkg:npm/no-version")]
+    result = _query_ids(packages, _BatchClient({"results": []}))
+    assert result.coverage.unqueryable_components == 1
+    assert result.coverage.queryable_components == 0
+    assert result.coverage.complete is False
+
+
+class _DetailResponse(_BatchResponse):
+    def __init__(self, payload, status_code=200):
+        super().__init__(payload)
+        self.status_code = status_code
+        self.request = httpx.Request("GET", "https://api.osv.dev/v1/vulns/X")
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            response = httpx.Response(self.status_code, request=self.request)
+            raise httpx.HTTPStatusError(
+                f"status {self.status_code}", request=self.request,
+                response=response)
+
+    def json(self):
+        if isinstance(self.payload, Exception):
+            raise self.payload
+        return self.payload
+
+
+class _DetailClient:
+    def __init__(self, response):
+        self.response = response
+
+    def get(self, *args, **kwargs):
+        return self.response
+
+
+@pytest.mark.parametrize("response", [
+    _DetailResponse({}, 429),
+    _DetailResponse({}, 500),
+    _DetailResponse({}),
+    _DetailResponse(json.JSONDecodeError("invalid", "x", 0)),
+])
+def test_osv_detail_failures_are_not_negative_cached(tmp_path, monkeypatch,
+                                                      response):
+    monkeypatch.setenv("PATCHTRIAGE_CACHE_DIR", str(tmp_path))
+    cache = {}
+    updates = {}
+    with pytest.raises((httpx.HTTPStatusError, ValueError)):
+        _fetch_vuln("OSV-TEST", _DetailClient(response), cache, updates)
+    _osv_cache_save(updates)
+    assert cache == {}
+    assert _osv_cache_load() == {}
+    assert not (tmp_path / "osv_vulns.json").exists()
+
+
+def test_osv_detail_success_is_timestamped_and_cached(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATCHTRIAGE_CACHE_DIR", str(tmp_path))
+    cache = {}
+    updates = {}
+    vuln = {"id": "OSV-TEST", "affected": []}
+    assert _fetch_vuln(
+        "OSV-TEST", _DetailClient(_DetailResponse(vuln)), cache, updates,
+    ) == vuln
+    _osv_cache_save(updates)
+    assert _osv_cache_load() == {"OSV-TEST": vuln}
+    stored = json.loads((tmp_path / "osv_vulns.json").read_text())
+    assert stored["_schema"] == "patchtriage-entry-cache-v1"
+    assert stored["entries"]["OSV-TEST"]["fetched_at"] > 0
+
+
+def test_osv_detail_rejects_network_record_for_different_id(tmp_path,
+                                                            monkeypatch):
+    monkeypatch.setenv("PATCHTRIAGE_CACHE_DIR", str(tmp_path))
+    cache = {}
+    updates = {}
+    response = _DetailResponse({"id": "OSV-DIFFERENT", "affected": []})
+
+    with pytest.raises(ValueError, match="does not match OSV-REQUESTED"):
+        _fetch_vuln(
+            "OSV-REQUESTED", _DetailClient(response), cache, updates)
+
+    assert cache == {}
+    assert updates == {}
+
+
+def test_osv_detail_discards_mismatched_cache_before_valid_refresh():
+    cache = {"OSV-REQUESTED": {"id": "OSV-DIFFERENT", "affected": []}}
+    updates = {}
+    expected = {"id": "OSV-REQUESTED", "affected": []}
+
+    result = _fetch_vuln(
+        "OSV-REQUESTED", _DetailClient(_DetailResponse(expected)),
+        cache, updates,
+    )
+
+    assert result == expected
+    assert cache == {"OSV-REQUESTED": expected}
+    assert updates == {"OSV-REQUESTED": expected}

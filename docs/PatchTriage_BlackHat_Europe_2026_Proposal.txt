@@ -1,0 +1,153 @@
+BLACK HAT EUROPE 2026 ARSENAL - PROPOSAL COPY
+
+Session Title
+
+PatchTriage: Evidence-Driven Patch Prioritization
+
+Track
+
+Vulnerability Assessment
+
+Secondary Track
+
+Risks
+
+Format
+
+New Tool
+
+Audience Level
+
+All
+
+Theme
+
+All
+
+Source Code
+
+https://github.com/d01ki/PatchTriage
+
+Tool Description / Abstract
+
+Vulnerability scanners are very good at finding problems. They are much less
+useful at answering the deployer's next question: which remediation should we
+execute first in this environment? CVSS measures technical severity, EPSS
+estimates future exploitation activity, and CISA KEV records observed
+exploitation, but none alone accounts for how a particular system is exposed
+or what its failure means to the organization.
+
+PatchTriage is an open-source, local-first vulnerability decision engine that
+implements the published CERT/CC SSVC Deployer model
+(ssvc:DT_DP:1.0.0). It ingests Trivy, Grype, and osv-scanner JSON, or resolves
+CycloneDX and SPDX JSON SBOMs through OSV when network access is available. It
+normalizes and deduplicates findings, then adds EPSS, CISA KEV, NVD, and
+official vendor evidence. The deterministic engine applies Exploitation,
+System Exposure, Automatable, and Human Impact to the official 72-path SSVC
+decision table.
+
+Instead of producing another opaque score, PatchTriage returns Defer,
+Scheduled, Out-of-Cycle, or Immediate together with the decision path,
+evidence provenance, confidence, and confirmation requirements. Findings are
+grouped into package upgrades or mitigations rather than presented only as a
+flat CVE list.
+
+Optional AI is deliberately placed outside the decision trust boundary. The
+deterministic SSVC engine computes the outcome before any model is called. An
+AI backend may improve the human-readable rationale and remediation guidance,
+but it cannot modify the outcome, action, deadline, or decision path. An audit
+independently recomputes each decision and detects changed inputs, unsupported
+numbers, and tampered paths. Failed AI calls fall back per finding to the
+deterministic result.
+
+The Arsenal demonstration is hands-on and reproducible. Attendees can import
+a scanner report or SBOM, change only the deployment context, and observe how
+the same vulnerability moves between official SSVC outcomes. They can compare
+CVSS-, EPSS-, KEV-, and SSVC-based prioritization side by side, inspect the
+evidence behind every decision, and generate an actionable remediation plan.
+The bundled demonstration, verifier, and generated reports work offline
+without external services or API keys. Fresh intelligence retrieval and SBOM
+resolution remain optional network-dependent operations.
+
+Tool Details
+
+PatchTriage addresses a specific gap between vulnerability discovery and
+patch execution: prioritizing remediation decisions instead of simply ranking
+vulnerabilities.
+
+The platform accepts Trivy, Grype, and osv-scanner JSON, plus CycloneDX and
+SPDX JSON SBOMs. It normalizes heterogeneous findings, correlates CVE and GHSA
+aliases, and enriches them with EPSS, CISA KEV, optional NVD data, and official
+vendor advisories. SBOM vulnerability resolution uses OSV and requires network
+access; the bundled demonstration uses frozen evidence and works offline.
+
+The deterministic engine combines threat evidence with the deployed target's
+System Exposure, Mission Impact, and Safety Impact, then applies the published
+CERT/CC SSVC Deployer decision table. CVSS, EPSS, KEV status, vendor evidence,
+and fixed versions remain visible, but they are not combined into a proprietary
+score. Unknown inputs use conservative defaults and remain marked for human
+confirmation.
+
+Optional AI is outside the decision trust boundary. The SSVC outcome is
+computed before a model is called; AI may improve only the explanation and
+remediation wording. A machine audit independently recomputes the result and
+detects altered outcomes, actions, deadlines, paths, or unsupported numerical
+claims. Failed AI calls retain the deterministic result.
+
+Findings are grouped by asset and package into concrete upgrades or
+mitigations, allowing one package action to address multiple vulnerability
+records. The offline verifier checks all 72 SSVC Deployer paths, all 16 Human
+Impact combinations, target-context propagation, deterministic repeatability,
+end-to-end behavior, and deliberate tampering. PatchTriage does not scan
+systems or apply patches; it converts collected evidence into auditable
+remediation decisions.
+
+Tool URL
+
+https://patch-triage.com/
+
+Notes for Reviewers
+
+PatchTriage is Apache-2.0 open source and can be evaluated without creating an
+account, using an API key, or trusting the hosted instance.
+
+Fastest reproducible review:
+
+git clone https://github.com/d01ki/PatchTriage
+cd PatchTriage
+docker compose run --rm demo
+
+Open:
+
+./out/demo_report.html
+
+Independent conformance and repeatability review:
+
+python -m venv .venv
+python -m pip install -e .
+patchtriage verify --repeats 100 --output verification_report.json
+
+The bundled demo and verifier are offline. No API key is required. The public
+hosted instance exposes the same GUI, but it is a shared demonstration service
+and should receive synthetic evidence only. Sensitive or production scan data
+should be assessed through the local deployment.
+
+Submission snapshot:
+
+Version: 0.6.0
+Commit: 8a60df80cf217c86bc30d40bdcec12e947fe8a04
+
+Documentation:
+
+README and quick start:
+https://github.com/d01ki/PatchTriage#readme
+
+Reviewer validation protocol:
+https://github.com/d01ki/PatchTriage/blob/main/docs/VALIDATION.md
+
+System design and technical specification:
+https://github.com/d01ki/PatchTriage/blob/main/docs/PATCHTRIAGE_SYSTEM_DESIGN_JA.md
+
+Display Name
+
+[Enter the presenter's public display name in the form.]

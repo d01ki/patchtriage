@@ -251,6 +251,26 @@ def _point(key: str, version: str, value: Enum, confidence: Confidence,
 
 def _infer_exploitation(finding: Finding) -> DecisionPoint:
     explicit = (finding.ssvc_inputs or {}).get("exploitation")
+    e = finding.enrichment
+    if e.in_cisa_kev:
+        evidence = ["CISA KEV confirms exploitation in the wild"]
+        if e.kev_ransomware:
+            evidence.append("CISA KEV reports ransomware campaign use")
+        conflict = explicit in {
+            Exploitation.NONE.value, Exploitation.PUBLIC_POC.value,
+        }
+        if conflict:
+            evidence.append(
+                "Analyst input conflicts with CISA KEV and cannot downgrade "
+                f"Active exploitation to {_LABELS[explicit]}"
+            )
+        elif explicit == Exploitation.ACTIVE.value:
+            evidence.append("Analyst-confirmed input agrees with CISA KEV")
+        return _point(
+            "E", "1.1.0", Exploitation.ACTIVE, Confidence.HIGH,
+            "CISA KEV", evidence, inferred=True,
+            needs_confirmation=conflict,
+        )
     if explicit in {value.value for value in Exploitation}:
         value = Exploitation(explicit)
         return _point(
@@ -259,15 +279,6 @@ def _infer_exploitation(finding: Finding) -> DecisionPoint:
             [f"Exploitation confirmed as {_LABELS[value.value]}"],
             inferred=False,
         )
-    e = finding.enrichment
-    if e.in_cisa_kev:
-        evidence = ["CISA KEV confirms exploitation in the wild"]
-        if e.kev_ransomware:
-            evidence.append("CISA KEV reports ransomware campaign use")
-        return _point(
-            "E", "1.1.0", Exploitation.ACTIVE, Confidence.HIGH,
-            "CISA KEV", evidence, inferred=True,
-        )
     if e.exploit_references:
         return _point(
             "E", "1.1.0", Exploitation.PUBLIC_POC, Confidence.MEDIUM,
@@ -275,12 +286,27 @@ def _infer_exploitation(finding: Finding) -> DecisionPoint:
             [f"{len(e.exploit_references)} public exploit reference(s) found"],
             inferred=True,
         )
-    searched = bool(e.enriched_at or e.sources or e.vendor_sources_checked)
+    coverage = sorted(set(e.exploit_sources_checked))
+    # Existing integrations may predate exploit_sources_checked. Non-empty
+    # NVD record fields still prove that the record and its references were
+    # retrieved; generic sources/enriched_at alone do not.
+    if not coverage and (
+        e.nvd_cvss_score is not None or e.nvd_cvss_vector or e.cwe_ids
+    ):
+        coverage = ["nvd-record"]
+    searched = bool(coverage)
+    evidence = (
+        ["No active exploitation or public PoC evidence was found in: "
+         + ", ".join(coverage)]
+        if searched else
+        ["No completed exploit-source search is recorded; absence of "
+         "evidence is not evidence of absence"]
+    )
     return _point(
         "E", "1.1.0", Exploitation.NONE,
         Confidence.MEDIUM if searched else Confidence.LOW,
-        "enrichment evidence",
-        ["No active exploitation or public PoC evidence was found"],
+        "exploit-source coverage" if searched else "unconfirmed default",
+        evidence,
         inferred=True,
         needs_confirmation=not searched,
     )

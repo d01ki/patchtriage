@@ -187,7 +187,7 @@ def _target_sensitivity_check(spec: dict) -> tuple[dict, list[dict], list[Findin
             "actual": sorted(actual_outcomes),
         })
     return _check(
-        "gui_target_context_sensitivity",
+        "target_context_mapping_sensitivity",
         len(observations), failures, observations,
     ), observations, findings
 

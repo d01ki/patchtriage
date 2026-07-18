@@ -13,10 +13,10 @@ def test_reviewer_validation_passes_offline():
     checks = {check["name"]: check for check in report["checks"]}
     assert checks["official_ssvc_deployer_table"]["cases"] == 72
     assert checks["official_ssvc_human_impact_table"]["cases"] == 16
-    assert checks["gui_target_context_sensitivity"]["passed"] is True
+    assert checks["target_context_mapping_sensitivity"]["passed"] is True
     outcomes = {
         row["actual_decision"]
-        for row in checks["gui_target_context_sensitivity"]["observations"]
+        for row in checks["target_context_mapping_sensitivity"]["observations"]
     }
     assert outcomes == {"immediate", "out_of_cycle", "scheduled"}
     assert checks["decision_tamper_detection"]["passed"] is True

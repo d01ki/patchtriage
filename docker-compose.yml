@@ -25,6 +25,10 @@ services:
       - NVD_API_KEY
       - GITHUB_TOKEN
       - GH_TOKEN
+      - PATCHTRIAGE_DEPLOYMENT_MODE=${PATCHTRIAGE_DEPLOYMENT_MODE:-local}
+      - PATCHTRIAGE_ALLOW_GENERIC_REPOSITORIES=${PATCHTRIAGE_ALLOW_GENERIC_REPOSITORIES:-true}
+      - PATCHTRIAGE_COOKIE_SECURE=${PATCHTRIAGE_COOKIE_SECURE:-auto}
+      - PATCHTRIAGE_BUILD_SHA=${PATCHTRIAGE_BUILD_SHA:-development}
     volumes:
       - cache:/home/patchtriage/.cache
       - config:/home/patchtriage/.config

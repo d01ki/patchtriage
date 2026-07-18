@@ -69,6 +69,8 @@ INDEX_HTML = r"""<!doctype html>
   .fieldlabel{display:grid;gap:5px;color:#697386;font-size:13px;font-weight:750;text-transform:uppercase;letter-spacing:.045em}.fieldlabel select,.fieldlabel input{font-size:14px;text-transform:none;letter-spacing:0}.fieldhelp{color:#70798a;font-size:12.5px;font-weight:500;text-transform:none;letter-spacing:0;line-height:1.45}.formactions{display:flex;gap:7px}.formactions .btn{flex:1}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .hint{font-size:13.5px;color:#70798a;line-height:1.45}.targetlist{display:flex;flex-direction:column;gap:9px}
+  .privacy{border:1px solid #efc46d;background:#fff7e2;color:#725016;border-radius:6px;padding:10px 11px;font-size:12.5px;line-height:1.45}
+  .advanced{border:1px solid #dbe0ec;border-radius:6px;padding:8px 10px}.advanced summary{cursor:pointer;font-weight:750;color:#596579;font-size:13px}.advancedgrid{display:grid;gap:9px;margin-top:10px}
   .target{background:#fff;border:1px solid #d9deea;border-radius:8px;padding:13px;transition:.18s}
   .target:hover{border-color:#b8c1d3;transform:translateY(-1px)}.targettop{display:flex;justify-content:space-between;gap:8px}
   .targetname{font-weight:750;overflow-wrap:anywhere}.targetname a{text-decoration:none}.targetname a:hover{text-decoration:underline}
@@ -97,6 +99,7 @@ INDEX_HTML = r"""<!doctype html>
   .running{padding:26px;border-left:4px solid #5368e8}.running strong{font-size:18px}.scanline{height:3px;background:#e1e5ed;margin-top:16px;overflow:hidden}.scanline:after{content:"";display:block;width:32%;height:100%;background:#5368e8;animation:scan 1s infinite ease-in-out}@keyframes scan{from{transform:translateX(-100%)}to{transform:translateX(410%)}}
   .toast{position:fixed;right:22px;bottom:22px;background:#151a25;color:#fff;border:1px solid #343d50;padding:11px 15px;border-radius:6px;box-shadow:0 12px 40px rgba(0,0,0,.28);transform:translateY(90px);opacity:0;transition:.2s;z-index:30;max-width:420px}.toast.show{transform:none;opacity:1}.toast.error{border-color:#a63d36}
   .filehidden{display:none}
+  dialog{border:0;border-radius:10px;padding:0;box-shadow:0 24px 80px rgba(0,0,0,.38);width:min(560px,calc(100% - 28px));color:var(--dark)}dialog::backdrop{background:rgba(8,11,17,.7)}.dialogbody{padding:22px;display:grid;gap:12px}.dialogbody h3{margin:0}.dialogbody p{margin:0;color:#667183;font-size:13.5px}.dialogactions{display:flex;justify-content:flex-end;gap:8px}
   @media(max-width:1100px){.hero{grid-template-columns:1fr}.benchmark{grid-template-columns:1fr}.workspaceinner{grid-template-columns:300px minmax(0,1fr)}.resultbody{grid-template-columns:1fr}.compare{border-right:0;border-bottom:1px solid #e4e7ed}}
   @media(max-width:820px){.outcomes{grid-template-columns:1fr 1fr}.outcome{border-left:1px solid var(--line);border-top:0}.kpis{grid-template-columns:1fr 1fr}.kpi+.kpi{border-left:1px solid var(--line)}.workspaceinner{grid-template-columns:1fr}.empty{grid-template-columns:1fr}.resulthead{grid-template-columns:104px 1fr}.priority{height:54px}.reportlink{grid-column:2}.flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg)}.decision{grid-column:1}.ssvcflow{grid-template-columns:1fr 1fr}.ssvcinputtable{display:block;overflow-x:auto}}
   @media(max-width:520px){h1{font-size:43px}.topbar{padding:0 16px}.brand{font-size:13px}.hero{padding-left:16px;padding-right:16px}.kpis{padding-left:16px;padding-right:16px}.prioritylegend{grid-template-columns:1fr 1fr}.prioritylegend>div{border-bottom:1px solid #e2e6ee}.resulthead{padding:15px}.resultbody>div,.metricrow{padding-left:15px;padding-right:15px}.versus{grid-template-columns:1fr}.vs{text-align:center}.row2{grid-template-columns:1fr}}
@@ -154,6 +157,7 @@ INDEX_HTML = r"""<!doctype html>
   <div class="workspaceinner">
     <aside>
       <div class="sectiontitle"><h2>Targets</h2><span>asset context</span></div>
+      <div class="privacy" id="privacy-note" hidden><b>Public service:</b> Do not upload confidential scanner output or private repository data. Anonymous evidence is retained temporarily.</div>
       <details class="add lightpanel" id="targetform">
         <summary id="form-title">Add a target</summary>
         <div class="form">
@@ -164,7 +168,7 @@ INDEX_HTML = r"""<!doctype html>
             <a href="https://certcc.github.io/SSVC/howto/deployer_tree/" target="_blank" rel="noopener">Open the official decision-point definitions ↗</a>
           </div>
           <input type="text" id="f-name" maxlength="120" placeholder="System name" aria-label="System name">
-          <input type="text" id="f-url" placeholder="https:// dashboard, repo, or runbook" aria-label="Target link URL">
+          <input type="text" id="f-url" placeholder="Reference URL (optional; this field is not scanned)" aria-label="Reference link URL">
           <label class="fieldlabel">System Exposure
             <span class="fieldhelp">The accessible attack surface of this deployed system or service.</span>
             <select id="f-exposure"><option value="unknown" selected>Unknown — use official Open default</option><option value="open">Open — Internet or widely accessible network</option><option value="controlled">Controlled — reliable access restrictions or mitigations</option><option value="small">Small — local service or highly controlled network</option></select>
@@ -177,6 +181,15 @@ INDEX_HTML = r"""<!doctype html>
             <span class="fieldhelp">Highest credible harm to people, operators, systems, environment, finances, or well-being.</span>
             <select id="f-safety"><option value="unknown" selected>Unknown — use official Marginal default</option><option value="negligible">Negligible — minor harm or small safety-margin reduction</option><option value="marginal">Marginal — major injury or safety capability failure</option><option value="critical">Critical — loss of life or system enters unsafe state</option><option value="catastrophic">Catastrophic — multiple deaths or total system loss</option></select>
           </label>
+          <details class="advanced">
+            <summary>Advanced context evidence</summary>
+            <div class="advancedgrid">
+              <label class="fieldlabel">Criticality<select id="f-criticality"><option value="unknown">Unknown</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></label>
+              <div class="row2"><label class="fieldlabel">Internet exposed<select id="f-internet"><option value="unknown">Unknown</option><option value="true">Yes</option><option value="false">No</option></select></label><label class="fieldlabel">Code reachable<select id="f-reachable"><option value="unknown">Unknown</option><option value="true">Observed / confirmed</option><option value="false">Not reachable</option></select></label></div>
+              <label class="fieldlabel">Runtime observed<select id="f-runtime"><option value="unknown">Unknown</option><option value="true">Observed at runtime</option><option value="false">Not observed</option></select></label>
+              <label class="fieldlabel">Context evidence sources<input type="text" id="f-sources" maxlength="400" placeholder="CMDB, OpenTelemetry, Falco"></label>
+            </div>
+          </details>
           <div class="formactions"><button class="btn primary" id="add">Add target</button><button class="btn" id="cancel-edit" type="button" hidden>Cancel</button></div>
           <div class="hint">Unknown is a PatchTriage capture state, not an SSVC value. The official conservative default is applied and visibly flagged for confirmation.</div>
         </div>
@@ -216,11 +229,12 @@ INDEX_HTML = r"""<!doctype html>
   </div>
 </section>
 
-<input type="file" id="filepick" class="filehidden" accept=".json,.spdx,.cdx">
+<input type="file" id="filepick" class="filehidden" accept=".json">
+<dialog id="repodialog"><div class="dialogbody"><h3 id="repo-title">Import a public repository</h3><p id="repo-help">PatchTriage fetches a GitHub SPDX SBOM without cloning or executing repository code. Private, SSH, and embedded-credential URLs are not accepted.</p><label class="fieldlabel">Repository URL<input type="text" id="repo-url" placeholder="https://github.com/owner/repository"></label><div class="dialogactions"><button class="btn" id="repo-cancel">Cancel</button><button class="btn primary" id="repo-import">Import evidence</button></div></div></dialog>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script>
 let CFG={backends:["rules"],has_key:false};
-let TARGETS=[];let RESULTS=new Map();let pickTarget=null;let editingTarget=null;let toastTimer=null;
+let TARGETS=[];let RESULTS=new Map();let pickTarget=null;let repoTarget=null;let editingTarget=null;let toastTimer=null;
 
 async function api(method,path,body){
   const opt={method,headers:{}};
@@ -242,9 +256,27 @@ async function loadConfig(){
   CFG=await api("GET","/api/config");
   const labels={rules:"SSVC deterministic",claude:"SSVC + AI explanation",cascade:"SSVC + AI cascade"};
   document.getElementById("backend").innerHTML=CFG.backends.map(b=>`<option value="${esc(b)}">${esc(labels[b]||b)}</option>`).join("");
+  document.getElementById("privacy-note").hidden=CFG.deployment_mode!=="public";
+  const generic=CFG.repository_import&&CFG.repository_import.generic_https_git==="local-osv-scanner";
+  const privateGithub=Boolean(CFG.repository_import&&CFG.repository_import.github_private_with_token);
+  document.getElementById("repo-title").textContent=(generic||privateGithub)?"Import a repository":"Import a public repository";
+  document.getElementById("repo-help").textContent=generic
+    ?`GitHub uses its Dependency Graph SBOM${privateGithub?" (including repositories authorized by the local token)":""}. Other public HTTPS Git repositories are cloned into a disposable local directory and statically inspected with OSV-Scanner; repository code and package managers are never executed.`
+    :privateGithub
+      ?"GitHub repositories authorized by this local deployment's token use the Dependency Graph SPDX SBOM API without cloning or executing repository code. SSH and embedded-credential URLs are not accepted."
+      :"This deployment fetches public GitHub SPDX SBOMs through the Dependency Graph API without cloning or executing repository code. Private, SSH, and embedded-credential URLs are not accepted.";
 }
 async function loadTargets(){
   TARGETS=await api("GET","/api/targets");renderTargets();updateKpis();
+}
+async function loadSummaries(){
+  const summaries=await api("GET","/api/summaries");RESULTS=new Map(summaries.map(summary=>[summary.target_id,summary]));renderResults();
+}
+async function resumeActiveJobs(){
+  const jobs=await api("GET","/api/jobs");
+  if(!jobs.length)return;
+  notify(`Resuming ${jobs.length} active assessment job${jobs.length===1?"":"s"}...`);
+  jobs.forEach(job=>waitForJob(job.job_id).then(summary=>{RESULTS.set(summary.target_id,summary);renderResults();}).catch(error=>notify(error.message,true)));
 }
 function contextTags(target){
   const exposure=target.system_exposure||"unknown",mission=target.mission_impact||"unknown",safety=target.safety_impact||"unknown";
@@ -256,14 +288,19 @@ function renderTargets(){
   const list=document.getElementById("targetlist");
   if(!TARGETS.length){list.innerHTML='<div class="hint">No targets registered yet.</div>';return;}
   list.innerHTML=TARGETS.map(target=>{
-    const name=target.url?`<a href="${esc(target.url)}" target="_blank" rel="noopener">${esc(target.name)} ↗</a>`:esc(target.name);
-    return `<article class="target" data-id="${target.id}">
-      <div class="targettop"><div><div class="targetname">${name}</div><div class="targetid">${target.id}</div></div></div>
+    const name=target.url?`<a href="${esc(target.url)}" target="_blank" rel="noopener">${esc(target.name)} &#8599;</a>`:esc(target.name);
+    const sourceName=target.source_name||target.source_format||"evidence";
+    const sourceMeta=target.source_file
+      ?`${esc(sourceName)} &middot; ${esc(target.source_format)} &middot; ${Math.max(1,Math.round((target.source_size||0)/1024))} KiB &middot; SHA-256 ${esc((target.source_sha256||"").slice(0,12))}`
+      :"Attach scanner JSON, CycloneDX/SPDX JSON, or import a public GitHub repository";
+    return `<article class="target" data-id="${esc(target.id)}">
+      <div class="targettop"><div><div class="targetname">${name}</div><div class="targetid">${esc(target.id)}</div></div></div>
       <div class="badges">${contextTags(target)}</div>
-      <div class="source ${target.source_file?"ready":""}">${target.source_file?`● ${esc(target.source_format)} file attached`:"○ Attach Trivy / Grype / OSV JSON, or a CycloneDX / SPDX SBOM"}</div>
+      <div class="source ${target.source_file?"ready":""}">${target.source_file?"&#9679; ":"&#9675; "}${sourceMeta}</div>
       <div class="targetactions">
-        <button class="btn small" data-action="edit">Review SSVC context</button>
-        <button class="btn small attach" data-action="import" title="Attach vulnerability scan JSON or a CycloneDX/SPDX SBOM">Attach scan / SBOM</button>
+        <button class="btn small" data-action="edit">Review context</button>
+        <button class="btn small attach" data-action="import" title="Upload Trivy/Grype/OSV JSON or a CycloneDX/SPDX JSON SBOM">Upload evidence</button>
+        <button class="btn small attach" data-action="repository" title="Fetch a public GitHub Dependency Graph SBOM">Import repository</button>
         <button class="btn small run-control" data-action="run" ${target.source_file?"":"disabled"}>Run</button>
         <button class="btn small danger" data-action="delete">Delete</button>
       </div></article>`;
@@ -297,12 +334,13 @@ function compareBlock(summary){
     <div class="comparefoot">KEV-first is now an explicit baseline. SSVC may rank a KEV below another finding when your exposure and human impact justify a different deployment action.</div>`;
 }
 function explainBlock(summary){
-  const x=summary.explanation;if(!x)return `<div class="emptyresult"><b>${summary.result_state==="no_findings"?"No vulnerabilities found":"No decision explanation available"}</b><span>${esc(summary.result_message||"Inspect the full report for input and processing details.")}</span></div>`;
+  const x=summary.explanation;if(!x)return `<div class="emptyresult"><b>${summary.result_state==="coverage_incomplete"?"Coverage incomplete":summary.result_state==="no_findings"?"No findings reported":"No decision explanation available"}</b><span>${esc(summary.result_message||"Inspect the full report for input and processing details.")}</span></div>`;
   const s=x.ssvc||{};const pointKeys=[["exploitation","Exploitation"],["system_exposure","System Exposure"],["automatable","Automatable"],["human_impact","Human Impact"]];
   const flow=pointKeys.map(([key,label])=>{const p=s[key]||{};return `<div class="factor"><span>${esc(label)}</span><b>${esc(p.label||"Unknown")}</b><small>${esc(p.confidence||"low")} confidence · ${esc(p.source||"missing")}</small></div>`;}).join("");
   const cvss=x.cvss==null?"Not available":Number(x.cvss).toFixed(1);
   const epss=x.epss==null?"Not available":`${(Number(x.epss)*100).toFixed(1)}%`;
-  const signals=[["CVSS",cvss],["EPSS (30 day)",epss],["CISA KEV",x.kev?"Listed":"Not listed"],["Fix",x.has_fix?"Available":"Not supplied"]].map(([label,value])=>`<div class="signal"><span>${esc(label)}</span><b>${esc(value)}</b></div>`).join("");
+  const kevStatus=(x.retrieval_status||{}).kev;const kevLabel=kevStatus==="failed"?"Lookup failed":x.kev?"Listed":kevStatus==="not_listed"?"Not listed":"Not confirmed";
+  const signals=[["CVSS",cvss],["EPSS (30 day)",epss],["CISA KEV",kevLabel],["Fix",x.has_fix?"Available":"Not supplied"]].map(([label,value])=>`<div class="signal"><span>${esc(label)}</span><b>${esc(value)}</b></div>`).join("");
   const marks={confirmed:"✓",attention:"!",unknown:"?","not-observed":"–"};
   const checks=(x.checks||[]).map(item=>`<li><span class="evidenceicon ${esc(item.status)}">${marks[item.status]||"·"}</span><span><strong>${esc(item.label)}</strong><small>${esc(item.value)}</small></span></li>`).join("");
   const advisories=(x.advisories||[]).map(a=>a.url
@@ -327,8 +365,10 @@ function ssvcInputSelect(field,item){
 }
 function ssvcInputBlock(summary){
   const inputs=summary.ssvc_inputs||[];if(!inputs.length)return "";
-  const review=inputs.filter(item=>item.needs_review).length;
-  const rows=inputs.map(item=>`<tr data-key="${esc(item.finding_key)}">
+  const total=summary.ssvc_inputs_total==null?inputs.length:summary.ssvc_inputs_total;
+  const review=summary.ssvc_inputs_review_total==null?inputs.filter(item=>item.needs_review).length:summary.ssvc_inputs_review_total;
+  const visible=inputs.slice(0,(CFG.limits&&CFG.limits.ssvc_review_rows)||250);
+  const rows=visible.map(item=>`<tr data-key="${esc(item.finding_key)}" data-exploitation="${esc((item.override||{}).exploitation||"auto")}" data-automatable="${esc((item.override||{}).automatable||"auto")}">
     <td><b>${esc(item.vuln_id)}</b><span class="inputsource">${esc(item.package)}</span></td>
     <td>${ssvcInputSelect("exploitation",item)}</td>
     <td>${ssvcInputSelect("automatable",item)}</td>
@@ -336,6 +376,7 @@ function ssvcInputBlock(summary){
   </tr>`).join("");
   return `<details class="ssvcinputreview" ${review?"open":""}><summary>Review vulnerability-specific SSVC inputs · ${review} need confirmation</summary>
     <p>CERT/CC defines Exploitation and Automatable per vulnerability. PatchTriage uses authoritative evidence or the official conservative default; select a value only when an analyst can confirm it.</p>
+    ${total>visible.length?`<p>Showing the highest-priority ${visible.length} of ${total} findings. Only changed rows are submitted; use the CLI for bulk review.</p>`:""}
     <table class="ssvcinputtable"><thead><tr><th>Finding</th><th>Exploitation (E)</th><th>Automatable (A)</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>
     <div class="ssvcinputactions"><button class="btn primary small save-ssvc-inputs">Save inputs and rerun</button></div>
   </details>`;
@@ -344,7 +385,7 @@ function renderResult(summary){
   const name=summary.url?`<a href="${esc(summary.url)}" target="_blank" rel="noopener">${esc(summary.name)} ↗</a>`:esc(summary.name);
   const context=summary.evaluated_context||{};
   const contextText=[["Exposure",context.system_exposure],["Mission",context.mission_impact],["Safety",context.safety_impact]].map(([label,value])=>`${label} ${String(value||"unknown").replaceAll("_"," ")}`).join(" · ");
-  const hasFindings=summary.total>0;const outcome=hasFindings?(summary.top_ssvc_decision||"No decision"):"No findings";const outcomeClass=hasFindings?String(outcome).toLowerCase().replaceAll(" ","-"):"no-findings";
+  const hasFindings=summary.total>0;const emptyOutcome=summary.result_state==="coverage_incomplete"?"Incomplete":"No findings";const outcome=hasFindings?(summary.top_ssvc_decision||"No decision"):emptyOutcome;const outcomeClass=hasFindings?String(outcome).toLowerCase().replaceAll(" ","-"):"no-findings";
   return `<article class="result" data-result="${summary.target_id}">
     <div class="resulthead">
       <div class="prioritybox"><div class="priority ${esc(outcomeClass)}">${esc(outcome)}</div><div class="prioritymeaning">${hasFindings?"SSVC outcome":"Input result"}</div><div class="prioritydue">${summary.top_deadline_days==null?"":`target: ≤ ${esc(summary.top_deadline_days)} days`}</div></div>
@@ -358,6 +399,8 @@ function renderResult(summary){
       <span class="metric">${summary.vendor_advisories||0} vendor advisories</span>
       ${(summary.vendor_sources||[]).map(s=>`<span class="metric">${esc(s.toUpperCase())}</span>`).join("")}
       ${(summary.vendor_errors||[]).length?`<span class="metric alert" title="${esc(summary.vendor_errors.join(" | "))}">${summary.vendor_errors.length} connector warnings</span>`:""}
+      ${(summary.enrichment_errors||[]).length?`<span class="metric alert" title="${esc(summary.enrichment_errors.join(" | "))}">${summary.enrichment_errors.length} evidence lookup warnings</span>`:""}
+      <span class="metric ${summary.source&&summary.source.coverage_status!=="complete"?"alert":""}">coverage ${esc((summary.source&&summary.source.coverage_status)||"unknown")}</span>
       <span class="metric">SSVC ${esc(summary.top_ssvc_decision||"not evaluated")}</span>
       ${(summary.ssvc_confirmation_fields||[]).length?`<span class="metric alert">confirm ${esc(summary.ssvc_confirmation_fields.map(v=>String(v).replaceAll("_"," ")).join(", "))}</span>`:""}
     </div>
@@ -371,30 +414,43 @@ function renderResults(){
   if(!RESULTS.size){results.innerHTML='<div class="running lightpanel"><strong>No completed decisions yet.</strong><div class="hint">Run a target or launch the offline Demo.</div></div>';updateKpis();return;}
   results.innerHTML=[...RESULTS.values()].map(renderResult).join("");updateKpis();
 }
-async function runTargets(ids){
-  if(!ids.length){notify("Attach a scan or SBOM to at least one target.",true);return;}
-  setBusy(true);const results=document.getElementById("results");
-  results.innerHTML=`<div class="running lightpanel"><strong>Building a defensible patch queue…</strong><div class="hint">enrich → contextualize → prioritize → audit → plan</div><div class="scanline"></div></div>`;
-  const backend=document.getElementById("backend").value;
-  let completed=0;
-  for(const id of ids){
-    try{const summary=await api("POST","/api/targets/"+id+"/run",{backend});RESULTS.set(id,summary);renderResults();}
-    catch(error){notify(`Target ${id}: ${error.message}`,true);}
-    if(RESULTS.has(id))completed++;
-  }
-  if(!completed)renderResults();
-  setBusy(false);updateKpis();
-}
 async function launchDemo(){
   try{setBusy(true);notify("Loading bundled threat evidence…");const target=await api("POST","/api/demo",{});await loadTargets();await runTargets([target.id]);notify("Offline Demo is ready.");}
   catch(error){notify(error.message,true);setBusy(false);}
+}
+
+async function waitForJob(jobId){
+  for(let attempt=0;attempt<1800;attempt++){
+    const job=await api("GET",`/api/jobs/${jobId}`);
+    if(job.state==="succeeded")return job.summary;
+    if(job.state==="failed")throw new Error(job.error||"Assessment failed");
+    await new Promise(resolve=>setTimeout(resolve,Math.min(2000,500+attempt*25)));
+  }
+  throw new Error("Assessment is still running; refresh to restore completed results.");
+}
+async function runTargets(ids){
+  if(!ids.length){notify("Attach evidence or import a repository first.",true);return;}
+  setBusy(true);ids.forEach(id=>RESULTS.delete(id));
+  document.getElementById("results").innerHTML='<div class="running lightpanel"><strong>Assessment jobs queued...</strong><div class="hint">evidence &rarr; context &rarr; SSVC &rarr; audit &rarr; remediation plan</div><div class="scanline"></div></div>';
+  const backend=document.getElementById("backend").value;
+  const pending=[];
+  for(const id of ids){
+    try{
+      const job=await api("POST",`/api/targets/${id}/runs`,{backend});
+      pending.push(waitForJob(job.job_id).then(summary=>{RESULTS.set(id,summary);renderResults();return summary;}));
+    }catch(error){notify(`Target ${id}: ${error.message}`,true);}
+  }
+  const settled=await Promise.allSettled(pending);
+  settled.filter(item=>item.status==="rejected").forEach(item=>notify(item.reason.message||String(item.reason),true));
+  renderResults();setBusy(false);updateKpis();
 }
 
 document.getElementById("jump").onclick=()=>document.getElementById("workspace").scrollIntoView();
 document.getElementById("demo").onclick=launchDemo;
 async function saveSsvcInputs(card){
   const id=card.dataset.result;
-  const inputs=[...card.querySelectorAll(".ssvcinputtable tbody tr")].map(row=>({finding_key:row.dataset.key,exploitation:row.querySelector('[data-field="exploitation"]').value,automatable:row.querySelector('[data-field="automatable"]').value}));
+  const inputs=[...card.querySelectorAll(".ssvcinputtable tbody tr")].map(row=>{const exploitation=row.querySelector('[data-field="exploitation"]').value,automatable=row.querySelector('[data-field="automatable"]').value;return {finding_key:row.dataset.key,exploitation,automatable,changed:exploitation!==row.dataset.exploitation||automatable!==row.dataset.automatable};}).filter(item=>item.changed).map(({changed,...item})=>item);
+  if(!inputs.length){notify("No SSVC input changes to save.");return;}
   try{setBusy(true);await api("POST",`/api/targets/${id}/ssvc-inputs`,{inputs});notify("SSVC inputs saved. Re-running the decision…");await runTargets([id]);}
   catch(error){notify(error.message,true);setBusy(false);}
 }
@@ -402,9 +458,11 @@ document.getElementById("results").onclick=event=>{
   if(event.target.closest(".demo-trigger"))launchDemo();
   const save=event.target.closest(".save-ssvc-inputs");if(save)saveSsvcInputs(save.closest(".result"));
 };
-function contextPayload(){return {system_exposure:document.getElementById("f-exposure").value,mission_impact:document.getElementById("f-mission").value,safety_impact:document.getElementById("f-safety").value};}
-function resetForm(){editingTarget=null;document.getElementById("form-title").textContent="Add a target";document.getElementById("add").textContent="Add target";document.getElementById("cancel-edit").hidden=true;["f-name","f-url"].forEach(id=>{document.getElementById(id).disabled=false;document.getElementById(id).value="";});["f-exposure","f-mission","f-safety"].forEach(id=>document.getElementById(id).value="unknown");}
-function editContext(target){editingTarget=target.id;document.getElementById("targetform").open=true;document.getElementById("form-title").textContent="Review SSVC context";document.getElementById("add").textContent="Save context";document.getElementById("cancel-edit").hidden=false;document.getElementById("f-name").value=target.name;document.getElementById("f-url").value=target.url||"";["f-name","f-url"].forEach(id=>document.getElementById(id).disabled=true);document.getElementById("f-exposure").value=target.system_exposure||"unknown";document.getElementById("f-mission").value=target.mission_impact||"unknown";document.getElementById("f-safety").value=target.safety_impact||"unknown";document.getElementById("targetform").scrollIntoView({behavior:"smooth",block:"start"});}
+function optionalBool(id){const value=document.getElementById(id).value;return value==="unknown"?null:value==="true";}
+function contextPayload(){return {system_exposure:document.getElementById("f-exposure").value,mission_impact:document.getElementById("f-mission").value,safety_impact:document.getElementById("f-safety").value,criticality:document.getElementById("f-criticality").value,internet_exposed:optionalBool("f-internet"),reachable:optionalBool("f-reachable"),runtime_observed:optionalBool("f-runtime"),context_sources:document.getElementById("f-sources").value.split(",").map(value=>value.trim()).filter(Boolean)};}
+function resetForm(){editingTarget=null;document.getElementById("form-title").textContent="Add a target";document.getElementById("add").textContent="Add target";document.getElementById("cancel-edit").hidden=true;["f-name","f-url","f-sources"].forEach(id=>{document.getElementById(id).disabled=false;document.getElementById(id).value="";});["f-exposure","f-mission","f-safety","f-criticality","f-internet","f-reachable","f-runtime"].forEach(id=>document.getElementById(id).value="unknown");}
+function boolChoice(value){return value===true?"true":value===false?"false":"unknown";}
+function editContext(target){editingTarget=target.id;document.getElementById("targetform").open=true;document.getElementById("form-title").textContent="Review SSVC context";document.getElementById("add").textContent="Save context";document.getElementById("cancel-edit").hidden=false;document.getElementById("f-name").value=target.name;document.getElementById("f-url").value=target.url||"";["f-name","f-url"].forEach(id=>document.getElementById(id).disabled=true);document.getElementById("f-exposure").value=target.system_exposure||"unknown";document.getElementById("f-mission").value=target.mission_impact||"unknown";document.getElementById("f-safety").value=target.safety_impact||"unknown";document.getElementById("f-criticality").value=target.criticality||"unknown";document.getElementById("f-internet").value=boolChoice(target.internet_exposed);document.getElementById("f-reachable").value=boolChoice(target.reachable);document.getElementById("f-runtime").value=boolChoice(target.runtime_observed);document.getElementById("f-sources").value=(target.context_sources||[]).join(", ");document.getElementById("targetform").scrollIntoView({behavior:"smooth",block:"start"});}
 document.getElementById("add").onclick=async()=>{
   const name=document.getElementById("f-name").value.trim();if(!editingTarget&&!name){notify("Give the target a system name.",true);return;}
   try{
@@ -418,20 +476,36 @@ document.getElementById("targetlist").onclick=async event=>{
   const card=button.closest(".target"),id=card.dataset.id,action=button.dataset.action;
   if(action==="edit")editContext(TARGETS.find(target=>target.id===id));
   if(action==="import"){pickTarget=id;document.getElementById("filepick").click();}
+  if(action==="repository"){repoTarget=id;document.getElementById("repo-url").value="";document.getElementById("repodialog").showModal();document.getElementById("repo-url").focus();}
   if(action==="run")runTargets([id]);
   if(action==="delete"&&confirm("Delete this target and its local evidence?")){
     try{await api("DELETE","/api/targets/"+id);RESULTS.delete(id);await loadTargets();renderResults();notify("Target deleted.");}
     catch(error){notify(error.message,true);}
   }
 };
+document.getElementById("repo-cancel").onclick=()=>{repoTarget=null;document.getElementById("repodialog").close();};
+document.getElementById("repo-import").onclick=async()=>{
+  const repositoryUrl=document.getElementById("repo-url").value.trim();
+  if(!repoTarget||!repositoryUrl){notify("Enter a public GitHub repository URL.",true);return;}
+  const targetId=repoTarget;
+  try{
+    document.getElementById("repo-import").disabled=true;notify("Fetching GitHub Dependency Graph SBOM...");
+    const imported=await api("POST",`/api/targets/${targetId}/repository`,{repository_url:repositoryUrl});
+    RESULTS.delete(targetId);document.getElementById("repodialog").close();repoTarget=null;await loadTargets();renderResults();
+    notify(`${imported.filename} imported (${imported.provenance.component_count} components).`);
+  }catch(error){notify("Repository import failed: "+error.message,true);}
+  finally{document.getElementById("repo-import").disabled=false;}
+};
 document.getElementById("filepick").onchange=async event=>{
   const file=event.target.files[0];if(!file||!pickTarget)return;
-  if(file.size>48*1024*1024){notify("Evidence file must be 48 MiB or smaller.",true);event.target.value="";return;}
-  try{await api("POST",`/api/targets/${pickTarget}/source`,{content:await file.text(),filename:file.name});await loadTargets();notify(`${file.name} attached.`);}
+  const maxBytes=(CFG.limits&&CFG.limits.source_bytes)||16*1024*1024;
+  if(file.size>maxBytes){notify(`Evidence file must be ${Math.floor(maxBytes/1024/1024)} MiB or smaller.`,true);event.target.value="";return;}
+  try{const targetId=pickTarget;const imported=await api("POST",`/api/targets/${targetId}/source`,{content:await file.text(),filename:file.name});RESULTS.delete(targetId);await loadTargets();renderResults();notify(`${file.name} attached (SHA-256 ${imported.sha256.slice(0,12)}).`);}
   catch(error){notify("Import failed: "+error.message,true);}
   event.target.value="";pickTarget=null;
 };
 document.getElementById("runall").onclick=()=>runTargets(TARGETS.filter(t=>t.source_file).map(t=>t.id));
 
-Promise.all([loadConfig(),loadTargets()]).catch(error=>notify(error.message,true));
+async function boot(){await Promise.all([loadConfig(),loadTargets()]);await loadSummaries();await resumeActiveJobs();}
+boot().catch(error=>notify(error.message,true));
 </script></body></html>"""

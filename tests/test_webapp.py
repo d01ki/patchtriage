@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from patchtriage.webapp.runner import _combine_coverage
 from patchtriage.webapp.server import Handler
 
 FIX = Path(__file__).parent / "fixtures"
@@ -90,6 +91,16 @@ def test_config_lists_rules_backend(server):
     }
 
 
+def test_provider_coverage_boundary_cannot_be_overwritten_by_parser_success():
+    coverage = _combine_coverage(
+        {"status": "no_package_inventory", "complete": False},
+        {"source_type": "scanner:osv", "complete": True, "records": 0},
+        "no_package_inventory",
+    )
+    assert coverage["status"] == "no_package_inventory"
+    assert coverage["complete"] is False
+
+
 def test_add_and_delete_target(server):
     status, t = _req("POST", server + "/api/targets",
                      {"name": "checkout", "url": "https://example.com",
@@ -135,6 +146,13 @@ def test_rejects_unsafe_target_url(server):
     assert status == 400
     assert "http:// or https://" in response["error"]
 
+    status, response = _req(
+        "POST", server + "/api/targets",
+        {"name": "secret", "url": "https://user:token@example.com/runbook"},
+    )
+    assert status == 400
+    assert "embedded credentials" in response["error"]
+
 
 def test_rejects_cross_origin_mutation(server):
     status, response = _req(
@@ -157,12 +175,14 @@ def test_security_headers_are_present(server):
     assert "Patch what matters" in page
     assert "Severity informs. Your environment decides." in page
     assert "Immediate decisions" in page
-    assert "Attach scan / SBOM" in page
-    assert "CycloneDX / SPDX SBOM" in page
+    assert "Upload evidence" in page
+    assert "Import repository" in page
+    assert "CycloneDX/SPDX JSON" in page
     assert "Categorical outcome — no aggregate SSVC score" in page
     assert "Automatable are evaluated" in page
     assert 'id="f-automatable"' not in page
-    assert "Context evidence sources" not in page
+    assert "Advanced context evidence" in page
+    assert "Context evidence sources" in page
     assert "Review vulnerability-specific SSVC inputs" in page
     assert "Black Hat" not in page
     assert "Arsenal" not in page
@@ -240,10 +260,9 @@ def test_empty_scan_is_reported_as_no_vulnerabilities(server):
     assert status == 200
     assert summary["total"] == 0
     assert summary["actions"] == 0
-    assert summary["result_state"] == "no_findings"
-    assert summary["result_message"] == (
-        "No vulnerabilities were found in the attached scan or SBOM."
-    )
+    assert summary["result_state"] == "coverage_incomplete"
+    assert "provider-reported" in summary["result_message"]
+    assert summary["source"]["coverage_status"] == "provider_reported"
     assert summary["top_ssvc_decision"] == ""
     assert summary["comparison"] is None
 
@@ -312,7 +331,10 @@ def test_analyst_can_confirm_per_vulnerability_ssvc_inputs(server):
         "POST", server + f"/api/targets/{target['id']}/run",
         {"backend": "rules"},
     )
-    finding = first["ssvc_inputs"][0]
+    finding = next(
+        item for item in first["ssvc_inputs"]
+        if item["exploitation"]["value"] != "active"
+    )
     status, saved = _req(
         "POST", server + f"/api/targets/{target['id']}/ssvc-inputs",
         {"inputs": [{
@@ -354,6 +376,12 @@ def test_full_run_over_sbom(server):
         pytest.skip("no network for OSV.dev")
     if st != 200:
         pytest.skip(f"OSV unreachable: {summary}")
+    if summary["result_state"] == "coverage_incomplete":
+        pytest.skip(
+            "OSV lookup incomplete: "
+            + " | ".join(
+                ((summary.get("source") or {}).get("provenance") or {})
+                .get("coverage", {}).get("errors", [])))
     assert summary["total"] > 0
     assert summary["report_url"] == f"/report/{t['id']}"
     # report is now fetchable

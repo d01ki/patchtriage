@@ -1,17 +1,21 @@
 """Triage audit — the verifiability layer.
 
-Every AI triage decision is machine-checked against the deterministic signals
-it was given. This is the tool's core claim: the LLM reasons, but it cannot
-fabricate, and you don't have to trust it — you can verify it.
+Every AI-assisted result is machine-checked against the deterministic signals
+it was given. The audit detects structured decision conflicts, unsupported
+numeric claims, and unsafe remediation text; it is a review control, not a
+proof that arbitrary natural-language output contains no error.
 
 Checks per finding:
-  fabricated_numbers   decimal values cited in the rationale must correspond
-                       to real signals (EPSS, CVSS) within tolerance
+  fabricated_numbers   numeric and percentage claims in AI rationale,
+                       remediation, and uncertainty text must correspond to
+                       real signals or the deterministic service target
   ssvc_consistency     priority and outcome must match the deterministic SSVC
                        Deployer decision table
   fix_consistency      "patch_*" actions require an available fixed version;
                        "mitigate" is for findings without one
   evidence_completeness the SSVC path and confidence provenance must be present
+  ai_recommendation_consistency nested AI actions cannot downgrade SSVC, claim
+                       KEV is inactive, or prescribe a nonexistent patch
 
 The result is attached to finding.triage["audit"] and surfaced in the CLI
 summary and the HTML report.
@@ -24,43 +28,146 @@ import re
 from ..models import Finding
 from .engine import RulesBackend
 
-_DECIMAL = re.compile(r"\d+\.\d+")
+_NUMBER = re.compile(r"(?<![A-Za-z0-9_])(?P<value>\d+(?:\.\d+)?)(?P<percent>\s*%)?")
+_URL = re.compile(r"https?://\S+", re.IGNORECASE)
+_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_KEV_DOWNGRADE = re.compile(
+    r"(?:\b(?:no|not|without)\b.{0,28}\bexploit(?:ation|ed)?\b|"
+    r"\bexploit(?:ation|ed)?\b.{0,28}\b(?:absent|none|unlikely)\b)",
+    re.IGNORECASE,
+)
+_PATCH_INSTRUCTION = re.compile(
+    r"\b(?:upgrade|update|install|apply\s+(?:the\s+)?patch|"
+    r"patch\s+(?:the|this|package|system))\b",
+    re.IGNORECASE,
+)
+
+_ACTION_RANK = {
+    "monitor": 0,
+    "investigate": 1,
+    "mitigate": 2,
+    "patch_scheduled": 2,
+    "patch_out_of_cycle": 3,
+    "patch_immediately": 4,
+}
 
 
-def _signal_values(f: Finding) -> list[float]:
+def _signal_values(f: Finding) -> set[float]:
     e = f.enrichment
     vals = [v for v in (e.epss_score, e.epss_percentile,
                         e.nvd_cvss_score, f.cvss_score) if v is not None]
     # common renderings of the same signals
-    vals += [round(v, 1) for v in vals] + [round(v, 2) for v in vals]
-    return vals
+    return set(vals + [round(v, 1) for v in vals]
+               + [round(v, 2) for v in vals])
+
+
+def _percentage_values(f: Finding) -> set[float]:
+    e = f.enrichment
+    values: set[float] = set()
+    for value in (e.epss_score, e.epss_percentile):
+        if value is None:
+            continue
+        percentage = value * 100 if 0.0 <= value <= 1.0 else value
+        values.update((percentage, round(percentage),
+                       round(percentage, 1), round(percentage, 2)))
+    return values
 
 
 def _strip_known_tokens(f: Finding, text: str) -> str:
     """Remove CVE ids and version strings so they don't parse as numbers."""
+    text = _URL.sub(" ", text)
+    text = _DATE.sub(" ", text)
     text = re.sub(r"CVE-\d{4}-\d+", " ", text)
-    for token in (f.package.version, f.package.fixed_version):
+    for token in (
+        f.vuln_id, *f.aliases, f.package.version, f.package.fixed_version,
+        f.enrichment.nvd_cvss_vector, f.enrichment.nvd_cvss_version,
+        f.enrichment.kev_due_date or "",
+    ):
         if token:
             text = text.replace(token, " ")
     return text
 
 
+def _triage_text_fields(triage: dict) -> list[tuple[str, str]]:
+    fields: list[tuple[str, str]] = []
+    rationale = triage.get("rationale")
+    if rationale:
+        fields.append(("rationale", str(rationale)))
+    ai = triage.get("ai_recommendation")
+    if not isinstance(ai, dict):
+        return fields
+    if ai.get("rationale"):
+        fields.append(("ai_rationale", str(ai["rationale"])))
+    for name in ("remediation_steps", "uncertainties"):
+        values = ai.get(name) or []
+        if isinstance(values, list):
+            fields.extend(
+                (f"ai_{name}[{index}]", str(value))
+                for index, value in enumerate(values)
+            )
+    return fields
+
+
+def _numeric_claim_flags(f: Finding, field: str, text: str,
+                         deadline_days: int) -> list[str]:
+    stripped = _strip_known_tokens(f, text)
+    signals = _signal_values(f)
+    percentages = _percentage_values(f)
+    flags: list[str] = []
+    for match in _NUMBER.finditer(stripped):
+        rendered = match.group("value")
+        value = float(rendered)
+        is_percent = bool(match.group("percent"))
+        nearby = stripped[
+            max(0, match.start() - 18):min(len(stripped), match.end() + 18)
+        ].lower()
+        is_duration = bool(re.search(
+            r"\b(?:day|days|hour|hours|week|weeks|month|months|deadline|sla|target)\b",
+            nearby,
+        ))
+        is_percentage_context = is_percent or bool(re.search(
+            r"\b(?:percent|percentage|percentile)\b", nearby,
+        ))
+        signal_context = bool(re.search(
+            r"\b(?:epss|cvss|score|percentile|probability|risk\s+rating)\b",
+            nearby,
+        ))
+        # Ordinals, protocol versions, numbered steps, ports, and other bare
+        # prose numbers are not quantitative vulnerability claims. Audit only
+        # explicit signal, percentage, or service-target/duration contexts.
+        if not (is_percentage_context or is_duration or signal_context):
+            continue
+        allowed = (
+            percentages if is_percent else
+            percentages | signals if is_percentage_context else
+            {float(deadline_days)} if is_duration else
+            signals
+        )
+        if any(abs(value - known) <= 0.051 for known in allowed):
+            continue
+        if is_percent:
+            flags.append(f"fabricated_percentage:{field}:{rendered}%")
+            continue
+        # Large bare integers are commonly years or advisory identifiers. They
+        # become auditable claims when paired with a duration/SLA unit.
+        if is_duration or signal_context or is_percentage_context:
+            flags.append(f"fabricated_number:{field}:{rendered}")
+    return flags
+
+
 def audit_finding(f: Finding, rules: RulesBackend) -> dict:
     t = f.triage or {}
     flags: list[str] = []
+    baseline = rules.triage(f)
     # 1. fabricated numbers
-    rationale = _strip_known_tokens(f, t.get("rationale", ""))
-    signals = _signal_values(f)
-    for m in _DECIMAL.finditer(rationale):
-        v = float(m.group())
-        if v > 10.0 or v == 0.0:  # not a score-like value / carries no signal
-            continue
-        if not any(abs(v - s) <= 0.051 for s in signals):
-            flags.append(f"fabricated_number:{v}")
+    text_fields = _triage_text_fields(t)
+    for field, text in text_fields:
+        flags.extend(_numeric_claim_flags(
+            f, field, text, baseline["suggested_deadline_days"],
+        ))
 
     # 2. deterministic SSVC decision respected. KEV is an input to
     # Exploitation=Active, not a shortcut that bypasses stakeholder context.
-    baseline = rules.triage(f)
     if t.get("priority") != baseline["priority"]:
         flags.append(
             f"ssvc_priority_mismatch:{baseline['priority']}->{t.get('priority')}")
@@ -107,13 +214,42 @@ def audit_finding(f: Finding, rules: RulesBackend) -> dict:
     if action == "mitigate" and has_fix and t.get("priority") in ("P1", "P2"):
         flags.append("mitigate_despite_available_fix")
 
+    # 4. The nested AI recommendation is advisory, but must not contradict or
+    # quietly downgrade the authoritative SSVC action. Its prose is checked
+    # above with the same numeric-evidence rules as the top-level rationale.
+    ai = t.get("ai_recommendation")
+    if isinstance(ai, dict):
+        ai_action = ai.get("action")
+        expected_action = baseline["action"]
+        if ai_action and ai_action != expected_action:
+            if _ACTION_RANK.get(str(ai_action), -1) < _ACTION_RANK.get(
+                expected_action, -1
+            ):
+                flags.append(
+                    f"ai_action_downgrade:{expected_action}->{ai_action}"
+                )
+            else:
+                flags.append(
+                    f"ai_action_mismatch:{expected_action}->{ai_action}"
+                )
+        remediation = ai.get("remediation_steps") or []
+        if not has_fix and isinstance(remediation, list) and any(
+            _PATCH_INSTRUCTION.search(str(step)) for step in remediation
+        ):
+            flags.append("ai_patch_instruction_without_fix")
+        if f.enrichment.in_cisa_kev:
+            ai_text = " ".join(text for _field, text in text_fields)
+            if _KEV_DOWNGRADE.search(ai_text):
+                flags.append("ai_kev_exploitation_downgrade_claim")
+
     return {
         "verified": not flags,
         "flags": flags,
         "baseline_priority": baseline["priority"],
         "ssvc_decision": expected_ssvc["decision"],
         "checks": ["fabricated_numbers", "ssvc_consistency",
-                   "fix_consistency", "evidence_completeness"],
+                   "fix_consistency", "evidence_completeness",
+                   "ai_recommendation_consistency"],
     }
 
 

@@ -22,7 +22,7 @@ LABEL org.opencontainers.image.title="PatchTriage" \
       org.opencontainers.image.source="https://github.com/d01ki/PatchTriage" \
       org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /install /usr/local
-COPY --from=osv-scanner /root/osv-scanner /usr/local/bin/osv-scanner
+COPY --from=osv-scanner /osv-scanner /usr/local/bin/osv-scanner
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates git \
     && rm -rf /var/lib/apt/lists/* \

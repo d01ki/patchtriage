@@ -194,6 +194,7 @@ INDEX_HTML = r"""<!doctype html>
           <div class="hint">Unknown is a PatchTriage capture state, not an SSVC value. The official conservative default is applied and visibly flagged for confirmation.</div>
         </div>
       </details>
+      <div style="margin:8px 0"><button class="btn small" id="fleet-open" title="Import every recently active repository of a GitHub account as targets">Import organization…</button></div>
       <div class="targetlist" id="targetlist"></div>
     </aside>
 
@@ -208,6 +209,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="scheduled"><b><i></i>Scheduled</b>Normal maintenance · example SLA 30 days</div>
         <div class="defer"><b><i></i>Defer</b>Monitor · example review at 90 days</div>
       </div>
+      <div id="fleetbar" class="lightpanel" style="margin-bottom:12px;padding:12px 14px" hidden></div>
       <div class="results" id="results">
         <div class="empty lightpanel">
           <div class="emptycopy">
@@ -231,6 +233,7 @@ INDEX_HTML = r"""<!doctype html>
 
 <input type="file" id="filepick" class="filehidden" accept=".json">
 <dialog id="repodialog"><div class="dialogbody"><h3 id="repo-title">Import a public repository</h3><p id="repo-help">PatchTriage fetches a GitHub SPDX SBOM without cloning or executing repository code. Private, SSH, and embedded-credential URLs are not accepted.</p><label class="fieldlabel">Repository URL<input type="text" id="repo-url" placeholder="https://github.com/owner/repository"></label><div class="dialogactions"><button class="btn" id="repo-cancel">Cancel</button><button class="btn primary" id="repo-import">Import evidence</button></div></div></dialog>
+<dialog id="fleetdialog"><div class="dialogbody"><h3>Import an organization</h3><p>Every recently pushed public repository of the account becomes a target with its GitHub Dependency Graph SBOM attached — the same no-clone, no-execution path as a single repository import. Forks and archived repositories are skipped. Each target starts with the official conservative SSVC defaults; review its context before trusting the decision.</p><label class="fieldlabel">Organization or user URL<input type="text" id="fleet-url" placeholder="https://github.com/your-org"></label><label class="fieldlabel">Repository limit<input type="number" id="fleet-limit" min="1" value="10"></label><div class="dialogactions"><button class="btn" id="fleet-cancel">Cancel</button><button class="btn primary" id="fleet-import">Import repositories</button></div></div></dialog>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script>
 let CFG={backends:["rules"],has_key:false};
@@ -411,8 +414,21 @@ function renderResult(summary){
 }
 function renderResults(){
   const results=document.getElementById("results");
-  if(!RESULTS.size){results.innerHTML='<div class="running lightpanel"><strong>No completed decisions yet.</strong><div class="hint">Run a target or launch the offline Demo.</div></div>';updateKpis();return;}
-  results.innerHTML=[...RESULTS.values()].map(renderResult).join("");updateKpis();
+  if(!RESULTS.size){results.innerHTML='<div class="running lightpanel"><strong>No completed decisions yet.</strong><div class="hint">Run a target or launch the offline Demo.</div></div>';updateKpis();refreshFleet();return;}
+  results.innerHTML=[...RESULTS.values()].map(renderResult).join("");updateKpis();refreshFleet();
+}
+async function refreshFleet(){
+  const bar=document.getElementById("fleetbar");
+  try{
+    const fleet=await api("GET","/api/fleet/summary");
+    if((fleet.targets_assessed||0)<2){bar.hidden=true;return;}
+    const o=fleet.outcomes||{};
+    const queue=(fleet.queue||[]).slice(0,3).map(entry=>`<div class="hint">&#8227; <b>${esc(entry.outcome_label||"")}</b> — ${esc(entry.target_name||"")}: ${esc(entry.summary||"")}${entry.kev_count?` <span style="color:#DC2626;font-weight:700">KEV×${entry.kev_count}</span>`:""}</div>`).join("");
+    bar.innerHTML=`<strong>Fleet view</strong> — ${fleet.targets_assessed}/${fleet.targets_total} targets assessed · ${fleet.findings_total} findings · `+
+      `<span style="color:#DC2626;font-weight:700">${o.immediate||0} Immediate</span> · <span style="color:#D97706;font-weight:650">${o.out_of_cycle||0} Out-of-Cycle</span> · ${o.scheduled||0} Scheduled · ${o.defer||0} Defer · ${fleet.kev_total||0} on KEV`+
+      `${fleet.coverage_incomplete_targets?` · <span style="color:#D97706">${fleet.coverage_incomplete_targets} with bounded coverage</span>`:""}${queue?`<div style="margin-top:6px">${queue}</div>`:""}`;
+    bar.hidden=false;
+  }catch(error){bar.hidden=true;}
 }
 async function launchDemo(){
   try{setBusy(true);notify("Loading bundled threat evidence…");const target=await api("POST","/api/demo",{});await loadTargets();await runTargets([target.id]);notify("Offline Demo is ready.");}
@@ -482,6 +498,23 @@ document.getElementById("targetlist").onclick=async event=>{
     try{await api("DELETE","/api/targets/"+id);RESULTS.delete(id);await loadTargets();renderResults();notify("Target deleted.");}
     catch(error){notify(error.message,true);}
   }
+};
+document.getElementById("fleet-open").onclick=()=>{document.getElementById("fleet-url").value="";document.getElementById("fleetdialog").showModal();document.getElementById("fleet-url").focus();};
+document.getElementById("fleet-cancel").onclick=()=>document.getElementById("fleetdialog").close();
+document.getElementById("fleet-import").onclick=async()=>{
+  const ownerUrl=document.getElementById("fleet-url").value.trim();
+  if(!ownerUrl){notify("Enter a GitHub organization or user URL.",true);return;}
+  const limit=parseInt(document.getElementById("fleet-limit").value,10)||10;
+  try{
+    document.getElementById("fleet-import").disabled=true;notify("Listing repositories and fetching SBOMs…");
+    const report=await api("POST","/api/fleet/import",{owner_url:ownerUrl,limit});
+    document.getElementById("fleetdialog").close();await loadTargets();renderResults();
+    const failed=report.failed?`, ${report.failed} failed`:"";
+    const existing=report.already_imported?`, ${report.already_imported} already imported`:"";
+    notify(`Imported ${report.imported} repositories from ${report.owner}${existing}${failed}. Press "Run all" to assess the fleet.`,Boolean(report.stopped_reason));
+    if(report.stopped_reason)notify(report.stopped_reason,true);
+  }catch(error){notify("Organization import failed: "+error.message,true);}
+  finally{document.getElementById("fleet-import").disabled=false;}
 };
 document.getElementById("repo-cancel").onclick=()=>{repoTarget=null;document.getElementById("repodialog").close();};
 document.getElementById("repo-import").onclick=async()=>{

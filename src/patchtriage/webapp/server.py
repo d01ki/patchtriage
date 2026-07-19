@@ -20,6 +20,7 @@ from importlib import resources
 from importlib.metadata import PackageNotFoundError, version
 from urllib.parse import urlsplit
 
+from .. import fleet as fleetmod
 from .. import targets as tstore
 from ..ingest.sbom import is_sbom
 from ..ingest.parsers import sniff_format
@@ -47,6 +48,8 @@ MAX_ACTIVE_JOBS_PER_SESSION = int(
 MAX_ACTIVE_JOBS_GLOBAL = int(
     os.environ.get("PATCHTRIAGE_MAX_ACTIVE_JOBS_GLOBAL", 20))
 MAX_RETAINED_JOBS = int(os.environ.get("PATCHTRIAGE_MAX_RETAINED_JOBS", 500))
+MAX_FLEET_IMPORT_REPOS = int(
+    os.environ.get("PATCHTRIAGE_MAX_FLEET_IMPORT_REPOS", 15))
 SESSION_COOKIE = "patchtriage_session"
 SESSION_TTL_SECONDS = 6 * 60 * 60
 _RUN_LOCKS: dict[tuple[str, str], threading.Lock] = {}
@@ -393,7 +396,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "epss-baseline", "kev-baseline",
                                  "reachability", "runtime-context",
                                  "vendor-advisories", "async-runs",
-                                 "github-repository-sbom"],
+                                 "github-repository-sbom",
+                                 "fleet-import"],
                 "version": APP_VERSION,
                 "build_sha": os.environ.get("PATCHTRIAGE_BUILD_SHA", "development"),
                 "ui_schema_version": 2,
@@ -416,6 +420,7 @@ class Handler(BaseHTTPRequestHandler):
                     "session_source_bytes": MAX_SESSION_SOURCE_BYTES,
                     "active_jobs_per_session": MAX_ACTIVE_JOBS_PER_SESSION,
                     "ssvc_review_rows": MAX_WEB_SSVC_INPUTS,
+                    "fleet_import_repos": MAX_FLEET_IMPORT_REPOS,
                 },
                 "connectors": {
                     "msrc": "public", "rhsa": "public", "usn": "public",
@@ -437,6 +442,8 @@ class Handler(BaseHTTPRequestHandler):
                 if summary:
                     summaries.append(summary)
             return self._send_json(summaries)
+        if path == "/api/fleet/summary":
+            return self._send_json(fleetmod.aggregate_fleet(workspace))
         if path == "/api/jobs":
             with _JOB_LOCK:
                 visible_jobs = [
@@ -550,6 +557,55 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return self._send_json({"error": str(exc)}, 400)
             return self._send_json(_public_target(t), 201)
+
+        if path == "/api/fleet/import":
+            body = self._read_json()
+            owner_url = body.get("owner_url")
+            if not isinstance(owner_url, str) or not owner_url.strip():
+                return self._send_json({"error": "owner_url is required"}, 400)
+            try:
+                limit = int(body.get("limit") or MAX_FLEET_IMPORT_REPOS)
+            except (TypeError, ValueError):
+                return self._send_json({"error": "limit must be a number"}, 400)
+            limit = max(1, min(limit, MAX_FLEET_IMPORT_REPOS))
+            context = {
+                key: body[key]
+                for key in fleetmod.FLEET_CONTEXT_FIELDS
+                if isinstance(body.get(key), str)
+            }
+            if not _IMPORT_SLOTS.acquire(blocking=False):
+                return self._send_json(
+                    {"error": "repository import capacity is busy; retry later"},
+                    429,
+                )
+            try:
+                try:
+                    report = fleetmod.import_fleet(
+                        owner_url,
+                        workspace_id=workspace,
+                        limit=limit,
+                        include_forks=bool(body.get("include_forks")),
+                        include_archived=bool(body.get("include_archived")),
+                        github_token=_github_import_token(),
+                        context=context,
+                        max_targets=MAX_TARGETS_PER_SESSION,
+                        max_workspace_source_bytes=MAX_SESSION_SOURCE_BYTES,
+                    )
+                except RepositoryRateLimitError as exc:
+                    return self._send_json({"error": str(exc)}, 429)
+                except RepositoryAccessDeniedError as exc:
+                    return self._send_json({"error": str(exc)}, 403)
+                except RepositoryNotFoundError as exc:
+                    return self._send_json({"error": str(exc)}, 404)
+                except RepositoryFetchError as exc:
+                    return self._send_json({"error": str(exc)}, 502)
+                except RepositoryError as exc:
+                    return self._send_json({"error": str(exc)}, 400)
+                except ValueError as exc:
+                    return self._send_json({"error": str(exc)}, 400)
+            finally:
+                _IMPORT_SLOTS.release()
+            return self._send_json(report)
 
         m = re.fullmatch(r"/api/targets/([0-9a-f]{12})/context", path)
         if m:

@@ -600,6 +600,163 @@ def demo(
                   "`patchtriage run ... --triage claude`.")
 
 
+@app.command()
+def fleet(
+    owner_url: str = typer.Argument(
+        ..., help="GitHub account URL, e.g. https://github.com/your-org"),
+    limit: int = typer.Option(
+        10, min=1, max=100,
+        help="Repositories to import (most recently pushed first)"),
+    include_forks: bool = typer.Option(
+        False, "--include-forks", help="Also import forked repositories"),
+    include_archived: bool = typer.Option(
+        False, "--include-archived", help="Also import archived repositories"),
+    no_assess: bool = typer.Option(
+        False, "--no-assess",
+        help="Import targets only; run assessments later (GUI or rerun)"),
+    triage: str = typer.Option(
+        "rules", help="Triage backend for the per-target assessments"),
+    ssvc_exposure: str = typer.Option(
+        "unknown", "--ssvc-exposure",
+        help="Shared SSVC System Exposure for every imported target"),
+    ssvc_mission_impact: str = typer.Option(
+        "unknown", "--ssvc-mission-impact",
+        help="Shared SSVC Mission Impact for every imported target"),
+    ssvc_safety_impact: str = typer.Option(
+        "unknown", "--ssvc-safety-impact",
+        help="Shared SSVC Safety Impact for every imported target"),
+    github_token: Optional[str] = typer.Option(
+        None, envvar="GITHUB_TOKEN",
+        help="Optional token (rate limits; local private repositories)"),
+    output: Optional[Path] = typer.Option(
+        None, "-o", help="Write the fleet rollup as JSON"),
+    html: Path = typer.Option(
+        Path("fleet_report.html"), help="Write the fleet HTML report"),
+    no_nvd: bool = typer.Option(
+        False, "--no-nvd", help="Skip NVD during assessment (faster)"),
+):
+    """Import a GitHub account's repositories and build one fleet queue.
+
+    Every repository becomes a registered target with its Dependency Graph
+    SBOM attached (identical provenance and boundaries to a single-repository
+    import), each target is assessed by the deterministic SSVC engine, and
+    the per-target results merge into one organization-wide, outcome-ordered
+    action queue.
+    """
+    from . import targets as tstore
+    from .fleet import aggregate_fleet, import_fleet
+    from .report.fleet import render_fleet_html
+    from .webapp.runner import run_target
+
+    with console.status(
+            f"listing and importing repositories from {owner_url}..."):
+        report = import_fleet(
+            owner_url,
+            limit=limit,
+            include_forks=include_forks,
+            include_archived=include_archived,
+            github_token=github_token,
+            context={
+                "system_exposure": ssvc_exposure,
+                "mission_impact": ssvc_mission_impact,
+                "safety_impact": ssvc_safety_impact,
+            },
+        )
+
+    table = Table(title=f"Fleet import - {report['owner']}")
+    for col in ("Repository", "Status", "Detail"):
+        table.add_column(col)
+    for row in report["results"]:
+        status = row["status"]
+        style = {"imported": "green", "already_imported": "cyan",
+                 "failed": "red"}.get(status, "yellow")
+        detail = str(row.get("error", ""))
+        if status == "imported":
+            detail = (f"{row.get('component_count', 0)} components "
+                      f"({row.get('coverage_status', '')})")
+        table.add_row(row["repository"], f"[{style}]{status}[/{style}]",
+                      detail[:80])
+    console.print(table)
+    listing = report["listing"]
+    skipped = listing["skipped_forks"] + listing["skipped_archived"]
+    if skipped:
+        console.print(
+            f"[dim]skipped {listing['skipped_forks']} fork(s) and "
+            f"{listing['skipped_archived']} archived; use --include-forks / "
+            "--include-archived to import them[/dim]")
+    for warning in listing["warnings"]:
+        console.print(f"[yellow]note:[/yellow] {warning}")
+    if report["stopped_reason"]:
+        console.print(f"[red]stopped:[/red] {report['stopped_reason']}")
+
+    fleet_ids = [row["target_id"] for row in report["results"]
+                 if row.get("target_id")]
+    if not fleet_ids:
+        console.print("[red]no targets were imported; nothing to assess[/red]")
+        raise typer.Exit(code=1)
+
+    if not no_assess:
+        failures = 0
+        for index, target_id in enumerate(fleet_ids, 1):
+            target = tstore.get_target(target_id)
+            if target is None:
+                continue
+            label = f"[{index}/{len(fleet_ids)}] {target['name']}"
+            try:
+                with console.status(f"assessing {label}..."):
+                    summary = run_target(
+                        target, backend=triage, use_nvd=not no_nvd,
+                        nvd_api_key=os.environ.get("NVD_API_KEY"))
+                outcome = summary.get("outcomes") or {}
+                console.print(
+                    f"{label}: {summary.get('total', 0)} finding(s) - "
+                    f"immediate {outcome.get('immediate', 0)}, "
+                    f"out-of-cycle {outcome.get('out_of_cycle', 0)}")
+            except Exception as exc:
+                failures += 1
+                console.print(f"[red]{label}: assessment failed - {exc}[/red]")
+        if failures:
+            console.print(
+                f"[yellow]{failures} target(s) failed assessment; they are "
+                "listed as not assessed in the fleet report[/yellow]")
+
+    rollup = aggregate_fleet(target_ids=fleet_ids)
+    outcomes = rollup["outcomes"]
+    console.print(
+        f"\n[bold]Fleet:[/bold] {rollup['targets_assessed']}/"
+        f"{rollup['targets_total']} targets assessed - "
+        f"[bold red]{outcomes['immediate']} immediate[/bold red], "
+        f"[yellow]{outcomes['out_of_cycle']} out-of-cycle[/yellow], "
+        f"{outcomes['scheduled']} scheduled, {outcomes['defer']} defer - "
+        f"{rollup['kev_total']} on CISA KEV")
+    if rollup["queue"]:
+        queue_table = Table(title="Cross-target action queue (top 10)")
+        for col in ("Outcome", "Target", "Action", "KEV", "Due"):
+            queue_table.add_column(col)
+        for entry in rollup["queue"][:10]:
+            style = {"P1": "bold red", "P2": "yellow"}.get(
+                entry.get("top_priority"), "")
+            outcome_text = str(entry.get("outcome_label", ""))
+            outcome_cell = (f"[{style}]{outcome_text}[/{style}]"
+                            if style else outcome_text)
+            queue_table.add_row(
+                outcome_cell, entry.get("target_name", ""),
+                str(entry.get("summary", ""))[:60],
+                str(entry.get("kev_count") or "-"),
+                f"{entry.get('deadline_days', 90)}d")
+        console.print(queue_table)
+
+    html.write_text(render_fleet_html(
+        rollup, title=f"PatchTriage - Fleet Report - {report['owner']}"),
+        encoding="utf-8")
+    console.print(f"fleet HTML report: [bold]{html.resolve()}[/bold]")
+    if output is not None:
+        output.write_text(
+            json.dumps({"import": report, "rollup": rollup}, indent=2),
+            encoding="utf-8")
+        console.print(f"fleet JSON rollup: [bold]{output.resolve()}[/bold]")
+
+
 def _print_actions(actions) -> None:
     table = Table(title="Remediation plan - SSVC deployment outcome first")
     for col in ("#", "SSVC outcome", "Action", "CVEs", "KEV", "Due"):

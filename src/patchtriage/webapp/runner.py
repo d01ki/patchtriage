@@ -29,6 +29,12 @@ from .. import targets as tstore
 MAX_WEB_SSVC_INPUTS = max(
     1, int(os.environ.get("PATCHTRIAGE_MAX_WEB_SSVC_INPUTS", 250)))
 
+# Per-target ceiling for the serialized action queue kept in the stored
+# summary. Fleet aggregation merges these queues across targets, so the cap
+# bounds fleet memory without hiding a target's most urgent work.
+MAX_SUMMARY_ACTIONS = max(
+    1, int(os.environ.get("PATCHTRIAGE_MAX_SUMMARY_ACTIONS", 25)))
+
 
 def _combine_coverage(declared: dict, observed: dict,
                       provider_status: str) -> dict:
@@ -300,6 +306,26 @@ def run_target(target: dict, backend: str = "rules", use_nvd: bool = True,
             ((top_finding.triage or {}).get("ssvc") or {}).get(
                 "decision_label", "") if top_finding else ""
         ),
+        "action_queue": [
+            {
+                "action_id": action.action_id,
+                "kind": action.kind,
+                "summary": action.summary,
+                "package": action.package,
+                "ecosystem": action.ecosystem,
+                "installed_version": action.installed_version,
+                "target_version": action.target_version,
+                "top_priority": action.top_priority,
+                "outcome_label": priority_definition(
+                    action.top_priority)["ssvc_outcome"],
+                "deadline_days": action.deadline_days,
+                "kev_count": action.kev_count,
+                "cves": action.cves[:8],
+                "finding_count": len(action.finding_keys),
+            }
+            for action in actions[:MAX_SUMMARY_ACTIONS]
+        ],
+        "action_queue_truncated": len(actions) > MAX_SUMMARY_ACTIONS,
         "evaluated_context": {
             "system_exposure": override.system_exposure,
             "mission_impact": override.mission_impact,

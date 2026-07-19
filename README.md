@@ -103,6 +103,7 @@ patchtriage serve       # GUI
 patchtriage demo        # reproducible offline demo
 patchtriage start       # guided CLI workflow
 patchtriage run --help  # scriptable pipeline
+patchtriage fleet URL   # import a GitHub org and build one fleet queue
 patchtriage verify      # offline conformance and repeatability proof
 ```
 
@@ -110,7 +111,8 @@ patchtriage verify      # offline conformance and repeatability proof
 
 1. Add a target that represents one deployed system or service.
 2. Record the target's CERT/CC SSVC context.
-3. Upload vulnerability evidence, or import a public repository.
+3. Upload vulnerability evidence, import a public repository, or import a
+   whole GitHub organization as a fleet of targets.
 4. Run the assessment. The GUI uses a background job so a reverse proxy does
    not have to hold one long enrichment request open.
 5. Review vulnerability-specific **Exploitation** and **Automatable** values;
@@ -157,6 +159,48 @@ claiming a ref-specific scan.
 
 See [Repository import and coverage model](docs/REPOSITORY_IMPORT.md) for the
 support matrix, threat boundary, coverage states, and deployment controls.
+
+## Fleet: assess an organization, not one repository
+
+One deployed system is a *target*; an organization's repositories are a
+*fleet*. The **Import organization…** button (GUI) and `patchtriage fleet`
+(CLI) list a GitHub account's public repositories, turn each recently pushed
+one into a target with its Dependency Graph SBOM attached — the exact same
+no-clone, no-execution path and provenance rules as a single-repository
+import — and merge the per-target SSVC results into one organization-wide,
+outcome-ordered action queue.
+
+```bash
+patchtriage fleet https://github.com/your-org --limit 10 \
+    --ssvc-exposure controlled --ssvc-mission-impact mef_support_crippled \
+    --html fleet_report.html -o fleet.json
+```
+
+Boundaries, stated plainly:
+
+- Aggregation never re-decides anything. Every finding's outcome was produced
+  per target by the deterministic SSVC engine; the fleet view only merges and
+  orders those results.
+- Forks and archived repositories are skipped by default (`--include-forks`
+  / `--include-archived` to opt in), and the listing reports exactly what was
+  skipped or capped, so a fleet result is always explainable as "these
+  repositories, chosen by this rule".
+- Shared SSVC context supplied at import time is a starting point for
+  triage, not a per-system assessment. Review each target's context in the
+  GUI before treating its decision as final; unknown values use the official
+  conservative defaults and stay flagged.
+- One repository's failure (no dependency graph, too large) never aborts the
+  rest; a provider rate limit or a target/quota ceiling stops the remainder
+  visibly instead of half-succeeding in silence. Re-running an import is
+  idempotent — already-imported repositories are recognized, not duplicated.
+- Per-target coverage states carry into the fleet report, and unassessed
+  targets are listed and excluded from every total, so an incomplete fleet
+  can never look complete.
+
+The hosted deployment caps repositories per import request
+(`PATCHTRIAGE_MAX_FLEET_IMPORT_REPOS`, default 15) inside the existing
+per-session target and evidence quotas, and its anonymous importer remains
+public-repositories-only.
 
 ## What target context means
 

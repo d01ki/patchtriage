@@ -174,16 +174,37 @@ def test_security_headers_are_present(server):
     assert "Run the offline demo" in page
     assert "Patch what matters" in page
     assert "Severity informs. Your environment decides." in page
+    assert "What are attackers doing?" in page
+    assert "How reachable is this system?" in page
+    assert "Can exploitation be automated?" in page
+    assert "What happens if exploitation succeeds?" in page
+    assert "SSVC · A" in page
+    assert "SSVC · HI" in page
+    assert "<strong>A</strong>" not in page
+    assert "<strong>HI</strong>" not in page
     assert "Immediate decisions" in page
     assert "Upload evidence" in page
     assert "Import repository" in page
     assert "CycloneDX/SPDX JSON" in page
     assert "Categorical outcome — no aggregate SSVC score" in page
-    assert "Automatable are evaluated" in page
+    assert "Exploitation and Automatable are reviewed per vulnerability" in page
     assert 'id="f-automatable"' not in page
+    assert "CERT/CC SSVC standard" in page
+    assert "not a numeric risk score" in page
+    assert "PatchTriage-only:" in page
+    assert "“Not assessed” stores missing context" in page
+    assert "Not assessed — default: Open" in page
+    assert "Not assessed — default: Support Crippled" in page
+    assert "Not assessed — default: Marginal" in page
+    assert "SSVC EXP 1.0.1" in page
+    assert "SSVC MI 2.0.0" in page
+    assert "SSVC SI 2.0.1" in page
     assert "Advanced context evidence" in page
     assert "Context evidence sources" in page
     assert "Review vulnerability-specific SSVC inputs" in page
+    assert 'id="backend-static"' in page
+    assert 'aria-label="Decision engine" hidden' in page
+    assert "const canChoose=available.length>1" in page
     assert "Black Hat" not in page
     assert "Arsenal" not in page
     assert "LOCAL DECISION ENGINE" not in page

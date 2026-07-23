@@ -45,7 +45,14 @@ The implementation is checked offline against all **72 Deployer paths** and
 all **16 Human Impact combinations** with `patchtriage verify`. See the
 [reviewer validation protocol](docs/VALIDATION.md).
 
-![PatchTriage demo](docs/demo.gif)
+## DEMO
+
+click 
+[![Watch Demo](docs/demo.png)](https://youtu.be/UxSTwKSwf0U)
+
+Or watch directly:
+https://youtu.be/UxSTwKSwf0U
+
 
 ## Quick start with Docker
 
@@ -107,18 +114,7 @@ patchtriage fleet URL   # import a GitHub org and build one fleet queue
 patchtriage verify      # offline conformance and repeatability proof
 ```
 
-## GUI workflow
 
-1. Add a target that represents one deployed system or service.
-2. Record the target's CERT/CC SSVC context.
-3. Upload vulnerability evidence, import a public repository, or import a
-   whole GitHub organization as a fleet of targets.
-4. Run the assessment. The GUI uses a background job so a reverse proxy does
-   not have to hold one long enrichment request open.
-5. Review vulnerability-specific **Exploitation** and **Automatable** values;
-   confirm them when the evidence-derived value or conservative default needs
-   human review, then rerun.
-6. Review the SSVC decision path and package-level remediation action.
 
 The **Upload evidence** button accepts:
 

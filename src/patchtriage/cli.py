@@ -38,7 +38,7 @@ from .enrich.clients import enrich
 from .evalcmp import evaluate
 from .ingest.parsers import load_file
 from .models import Asset
-from .plan import build_plan
+from .plan import Action, build_plan
 from .presentation import priority_definition
 from .report.html import render_html
 from .ssvc import ssvc_order_key
@@ -291,18 +291,292 @@ def run(
     _emit(findings, subset, actions, eval_rows, output, html)
 
 
+def _prompt_existing_path(
+    label: str,
+    *,
+    default: str,
+    directory: bool,
+) -> Path:
+    """Prompt until the operator provides an existing file or directory."""
+    expected = "directory" if directory else "file"
+    while True:
+        value = typer.prompt(label, default=default).strip()
+        path = Path(value).expanduser()
+        if path.exists() and (
+            path.is_dir() if directory else path.is_file()
+        ):
+            return path
+        console.print(f"[red]{path} is not an existing {expected}[/red]")
+
+
+def _upgrade_action_table(actions: list[Action]) -> None:
+    table = Table(title="Confirmed dependency upgrades")
+    table.add_column("#", justify="right")
+    table.add_column("Priority")
+    table.add_column("Package")
+    table.add_column("Version")
+    table.add_column("CVEs", justify="right")
+    for index, action in enumerate(actions, start=1):
+        table.add_row(
+            str(index),
+            action.top_priority,
+            action.package,
+            f"{action.installed_version or '?'} -> {action.target_version}",
+            str(len(action.cves)),
+        )
+    console.print(table)
+
+
+def _prompt_upgrade_action(report: Path) -> str:
+    from .remediation import load_upgrade_actions
+
+    actions = load_upgrade_actions(report)
+    if not actions:
+        raise ValueError("the report contains no confirmed upgrade action")
+    _upgrade_action_table(actions)
+    while True:
+        selected = typer.prompt(
+            "Upgrade number to patch",
+            default=1,
+        )
+        try:
+            index = int(selected)
+        except (TypeError, ValueError):
+            index = 0
+        if 1 <= index <= len(actions):
+            return actions[index - 1].action_id
+        console.print(
+            f"[red]pick a number from 1 to {len(actions)}[/red]"
+        )
+
+
+def _prompt_check_commands() -> list[str]:
+    from .remediation import RemediationError, parse_check_command
+
+    console.print(
+        "\n[bold]Verification commands[/bold] - add one command at a time. "
+        "Shell operators are not accepted; enter separate commands instead."
+    )
+    console.print(
+        "[dim]Examples: npm test  |  python -m pytest  |  cargo test[/dim]"
+    )
+    checks: list[str] = []
+    while True:
+        value = typer.prompt(
+            "Check command (Enter when done)",
+            default="",
+            show_default=False,
+        ).strip()
+        if not value:
+            return checks
+        try:
+            parse_check_command(value)
+        except RemediationError as exc:
+            console.print(f"[red]{exc}[/red]")
+            continue
+        checks.append(value)
+
+
+def _default_remediation_output(repository: Path) -> Path:
+    repository = repository.resolve()
+    return repository.parent / f"{repository.name}-patchtriage-remediation"
+
+
+def _prompt_remediation_output(repository: Path) -> Path:
+    default = _default_remediation_output(repository)
+    while True:
+        value = typer.prompt(
+            "Output directory",
+            default=str(default),
+        ).strip()
+        output = Path(value).expanduser().resolve()
+        try:
+            output.relative_to(repository.resolve())
+        except ValueError:
+            pass
+        else:
+            console.print(
+                "[red]output must be outside the source repository[/red]"
+            )
+            continue
+        if output.exists() and (
+            not output.is_dir() or any(output.iterdir())
+        ):
+            console.print(
+                "[red]output must be absent or an empty directory[/red]"
+            )
+            continue
+        return output
+
+
+def _print_remediation_result(result) -> None:
+    style = "green" if result.status == "verified" else "yellow"
+    console.print(
+        f"[{style}]remediation: {result.status}[/{style}]\n"
+        f"  action:    {result.action.summary}\n"
+        f"  workspace: {result.workspace}\n"
+        f"  patch:     {result.patch_file}\n"
+        f"  files:     {', '.join(result.changed_files)}"
+    )
+    for warning in result.warnings:
+        console.print(f"[yellow]warning:[/yellow] {warning}")
+    if result.scan.remaining_cves:
+        console.print(
+            "[red]remaining target CVEs:[/red] "
+            + ", ".join(result.scan.remaining_cves)
+        )
+    console.print("\n[bold]Local review commands[/bold]")
+    commands = [
+        f'git -C "{result.workspace}" diff --check',
+        f'git -C "{result.workspace}" diff',
+        f'git -C "{result.source_repository}" apply --check '
+        f'"{result.patch_file}"',
+        f'git -C "{result.source_repository}" apply "{result.patch_file}"',
+    ]
+    for command in commands:
+        console.print(f"  {command}", markup=False)
+
+
+def _execute_remediation_cli(
+    report: Path,
+    repository: Path,
+    output_dir: Path,
+    *,
+    action_id: Optional[str],
+    checks: list[str],
+    refresh_lockfiles: bool,
+    rescan: bool,
+    scanner: Optional[str],
+    timeout: int,
+):
+    from .remediation import RemediationError, execute_remediation
+
+    try:
+        result = execute_remediation(
+            report,
+            repository,
+            output_dir,
+            action_id=action_id,
+            checks=checks,
+            refresh_lockfiles=refresh_lockfiles,
+            rescan=rescan,
+            scanner_binary=scanner,
+            timeout=timeout,
+        )
+    except RemediationError as exc:
+        console.print(f"[red]remediation failed:[/red] {exc}")
+        raise typer.Exit(code=1)
+    _print_remediation_result(result)
+    if result.status == "verification_failed":
+        raise typer.Exit(code=2)
+    return result
+
+
+def _guided_remediation(
+    report: Optional[Path],
+    repository: Optional[Path],
+    output_dir: Optional[Path],
+    *,
+    action_id: Optional[str],
+    checks: Optional[list[str]],
+    no_lock: bool,
+    no_scan: bool,
+    scanner: Optional[str],
+    timeout: int,
+):
+    """Collect missing local remediation inputs and execute the patch."""
+    from .remediation import RemediationError
+
+    guided = report is None or repository is None
+    console.print(
+        "\n[bold]Local dependency remediation[/bold] - the source checkout "
+        "stays unchanged; PatchTriage works in an isolated Git clone."
+    )
+    if report is None:
+        report = _prompt_existing_path(
+            "PatchTriage JSON report",
+            default="report.json",
+            directory=False,
+        )
+    elif not report.is_file():
+        raise RemediationError(f"{report} is not an existing file")
+
+    if repository is None:
+        repository = _prompt_existing_path(
+            "Local Git repository",
+            default=".",
+            directory=True,
+        )
+    elif not repository.is_dir():
+        raise RemediationError(f"{repository} is not an existing directory")
+    if not (repository / ".git").exists():
+        raise RemediationError(
+            f"{repository} is not a Git working tree"
+        )
+
+    if guided and action_id is None:
+        action_id = _prompt_upgrade_action(report)
+    if guided and checks is None:
+        checks = _prompt_check_commands()
+    checks = list(checks or ())
+
+    if output_dir is None:
+        if guided:
+            output_dir = _prompt_remediation_output(repository)
+        else:
+            output_dir = _default_remediation_output(repository)
+
+    refresh_lockfiles = not no_lock
+    rescan = not no_scan
+    if guided and not no_lock:
+        refresh_lockfiles = typer.confirm(
+            "Refresh a supported lockfile?", default=True
+        )
+    if guided and not no_scan:
+        rescan = typer.confirm(
+            "Rescan the isolated patch with OSV-Scanner when available?",
+            default=True,
+        )
+
+    if guided:
+        console.print("\n[bold]Execution plan[/bold]")
+        console.print(f"  report:     {report}", markup=False)
+        console.print(f"  repository: {repository}", markup=False)
+        console.print(f"  output:     {output_dir}", markup=False)
+        console.print(
+            "  checks:     "
+            + (", ".join(checks) if checks else "none"),
+            markup=False,
+        )
+        if not typer.confirm("Create and verify this patch?", default=True):
+            console.print("[yellow]remediation cancelled[/yellow]")
+            return None
+
+    return _execute_remediation_cli(
+        report,
+        repository,
+        output_dir,
+        action_id=action_id,
+        checks=checks,
+        refresh_lockfiles=refresh_lockfiles,
+        rescan=rescan,
+        scanner=scanner,
+        timeout=timeout,
+    )
+
+
 @app.command()
 def remediate(
-    report: Path = typer.Argument(
-        ..., exists=True, dir_okay=False,
-        help="PatchTriage JSON report produced by `patchtriage run -o`",
+    report: Optional[Path] = typer.Argument(
+        None,
+        help="PatchTriage JSON report; omit to use the local guided workflow",
     ),
-    repository: Path = typer.Option(
-        ..., "--repository", "-r", exists=True, file_okay=False,
-        help="Local Git working tree to patch from its committed HEAD",
+    repository: Optional[Path] = typer.Option(
+        None, "--repository", "-r",
+        help="Local Git working tree; omit to be prompted",
     ),
-    output_dir: Path = typer.Option(
-        Path("patchtriage-remediation"), "--output-dir", "-o",
+    output_dir: Optional[Path] = typer.Option(
+        None, "--output-dir", "-o",
         help="Empty/absent directory for the isolated workspace and artifacts",
     ),
     action_id: Optional[str] = typer.Option(
@@ -332,43 +606,26 @@ def remediate(
     The source checkout is never modified. The result directory contains a
     reviewable Git workspace, `remediation.patch`, `remediation.json`, and an
     OSV-Scanner result when the scanner is available. Nothing is pushed,
-    merged, or deployed.
+    merged, or deployed. Run without REPORT or --repository for a guided local
+    workflow.
     """
-    from .remediation import RemediationError, execute_remediation
+    from .remediation import RemediationError
 
     try:
-        result = execute_remediation(
+        _guided_remediation(
             report,
             repository,
             output_dir,
             action_id=action_id,
-            checks=check or (),
-            refresh_lockfiles=not no_lock,
-            rescan=not no_scan,
-            scanner_binary=scanner,
+            checks=check,
+            no_lock=no_lock,
+            no_scan=no_scan,
+            scanner=scanner,
             timeout=timeout,
         )
-    except RemediationError as exc:
+    except (RemediationError, ValueError, OSError) as exc:
         console.print(f"[red]remediation failed:[/red] {exc}")
         raise typer.Exit(code=1)
-
-    style = "green" if result.status == "verified" else "yellow"
-    console.print(
-        f"[{style}]remediation: {result.status}[/{style}]\n"
-        f"  action:    {result.action.summary}\n"
-        f"  workspace: {result.workspace}\n"
-        f"  patch:     {result.patch_file}\n"
-        f"  files:     {', '.join(result.changed_files)}"
-    )
-    for warning in result.warnings:
-        console.print(f"[yellow]warning:[/yellow] {warning}")
-    if result.scan.remaining_cves:
-        console.print(
-            "[red]remaining target CVEs:[/red] "
-            + ", ".join(result.scan.remaining_cves)
-        )
-    if result.status == "verification_failed":
-        raise typer.Exit(code=2)
 
 
 @app.command()
@@ -660,6 +917,35 @@ def start():
         raise typer.Exit(1)
     _emit(findings, subset, actions, eval_rows, Path(output), Path(html))
     _offer_browser(Path(html))
+    if any(
+        action.kind == "upgrade" and action.target_version
+        for action in actions
+    ):
+        console.print(
+            "\n[bold]5. Local patch[/bold] - PatchTriage can now prepare "
+            "one confirmed dependency upgrade in an isolated Git clone."
+        )
+        if typer.confirm(
+            "Continue to guided dependency remediation?",
+            default=False,
+        ):
+            from .remediation import RemediationError
+
+            try:
+                _guided_remediation(
+                    Path(output),
+                    None,
+                    None,
+                    action_id=None,
+                    checks=None,
+                    no_lock=False,
+                    no_scan=False,
+                    scanner=None,
+                    timeout=600,
+                )
+            except (RemediationError, ValueError, OSError) as exc:
+                console.print(f"[red]remediation failed:[/red] {exc}")
+                raise typer.Exit(code=1)
 
 
 def _offer_browser(html: Path) -> None:

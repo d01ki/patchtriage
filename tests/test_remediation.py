@@ -7,11 +7,14 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from patchtriage.cli import app
 from patchtriage.plan import Action
 from patchtriage.remediation import (
     RemediationError,
     execute_remediation,
+    load_upgrade_actions,
     lockfile_commands,
     parse_check_command,
     update_dependency_manifests,
@@ -230,3 +233,131 @@ def test_check_commands_are_tokenized_without_a_shell():
     assert parse_check_command('python -c "print(1)"') == [
         "python", "-c", "print(1)",
     ]
+
+
+def test_load_upgrade_actions_filters_non_patch_actions(tmp_path):
+    upgrade = _action()
+    investigate = _action(
+        action_id="investigate:repo:npm::lodash",
+        kind="investigate",
+        target_version="",
+    )
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps({
+            "actions": [
+                upgrade.model_dump(mode="json"),
+                investigate.model_dump(mode="json"),
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    assert load_upgrade_actions(report) == [upgrade]
+
+
+def test_remediate_without_arguments_runs_guided_local_workflow(tmp_path):
+    repository = _repository(
+        tmp_path,
+        {"package.json": '{"dependencies":{"lodash":"4.17.20"}}\n'},
+    )
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps({"actions": [_action().model_dump(mode="json")]}),
+        encoding="utf-8",
+    )
+    output = tmp_path / "source-patchtriage-remediation"
+    answers = "\n".join([
+        str(report),
+        str(repository),
+        "1",
+        "",
+        "",
+        "y",
+        "",
+    ])
+
+    result = CliRunner().invoke(
+        app,
+        ["remediate", "--no-lock", "--no-scan"],
+        input=answers,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Confirmed dependency upgrades" in result.output
+    assert "Execution plan" in result.output
+    assert "Local review commands" in result.output
+    assert (output / "remediation.patch").is_file()
+    assert json.loads(
+        (output / "workspace" / "package.json").read_text(encoding="utf-8")
+    )["dependencies"]["lodash"] == "4.17.21"
+
+
+def test_start_offers_guided_remediation_after_report(tmp_path, monkeypatch):
+    config = tmp_path / "config.json"
+    config.write_text("{}", encoding="utf-8")
+    scan = tmp_path / "scan.json"
+    scan.write_text("{}", encoding="utf-8")
+    captured = {}
+
+    monkeypatch.setattr(
+        "patchtriage.cli.cfgmod.config_path", lambda: config
+    )
+    monkeypatch.setattr(
+        "patchtriage.cli.cfgmod.apply_to_env", lambda: None
+    )
+    monkeypatch.setattr(
+        "patchtriage.cli.cfgmod.load",
+        lambda: {"default_backend": "rules"},
+    )
+    monkeypatch.setattr(
+        "patchtriage.cli.globmod.glob", lambda _pattern: [str(scan)]
+    )
+    monkeypatch.setattr(
+        "patchtriage.cli.has_ai_configuration", lambda: False
+    )
+    monkeypatch.setattr(
+        "patchtriage.cli._pipeline",
+        lambda *_args, **_kwargs: ([], [], [_action()], []),
+    )
+    monkeypatch.setattr(
+        "patchtriage.cli._emit", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "patchtriage.cli._offer_browser", lambda _html: None
+    )
+
+    def fake_guided(report, repository, output_dir, **kwargs):
+        captured.update({
+            "report": report,
+            "repository": repository,
+            "output_dir": output_dir,
+            **kwargs,
+        })
+
+    monkeypatch.setattr(
+        "patchtriage.cli._guided_remediation", fake_guided
+    )
+    answers = "\n".join([
+        "scan.json",
+        "",
+        "",
+        "",
+        "",
+        "n",
+        "n",
+        "",
+        "n",
+        "",
+        "",
+        "y",
+        "",
+    ])
+
+    result = CliRunner().invoke(app, ["start"], input=answers)
+
+    assert result.exit_code == 0, result.output
+    assert "5. Local patch" in result.output
+    assert captured["report"] == Path("report.json")
+    assert captured["repository"] is None
+    assert captured["checks"] is None

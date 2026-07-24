@@ -443,20 +443,38 @@ def _safe_slug(value: str) -> str:
     return (slug or "dependency")[:48]
 
 
-def _select_action(report: dict, action_id: str | None) -> Action:
-    actions = [Action.model_validate(value) for value in report.get("actions", [])]
-    upgrades = [
+def load_upgrade_actions(report_path: Path) -> list[Action]:
+    """Load the ordered, confirmed dependency upgrades from a JSON report."""
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RemediationError(f"could not read report: {exc}") from exc
+    if not isinstance(report, dict):
+        raise RemediationError("report must contain a JSON object")
+    try:
+        actions = [
+            Action.model_validate(value)
+            for value in report.get("actions", [])
+        ]
+    except (TypeError, ValueError) as exc:
+        raise RemediationError(
+            "report contains an invalid remediation action"
+        ) from exc
+    return [
         action for action in actions
         if action.kind == "upgrade" and action.target_version
     ]
+
+
+def _select_action(actions: list[Action], action_id: str | None) -> Action:
     if action_id:
-        for action in upgrades:
+        for action in actions:
             if action.action_id == action_id:
                 return action
         raise RemediationError(f"no upgrade action matches {action_id!r}")
-    if not upgrades:
+    if not actions:
         raise RemediationError("the report contains no confirmed upgrade action")
-    return upgrades[0]
+    return actions[0]
 
 
 def _scan_remaining_cves(scan_path: Path, expected: Iterable[str]) -> list[str]:
@@ -508,11 +526,7 @@ def execute_remediation(
             raise RemediationError("output directory must be empty or absent")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RemediationError(f"could not read report: {exc}") from exc
-    action = _select_action(report, action_id)
+    action = _select_action(load_upgrade_actions(report_path), action_id)
 
     git = shutil.which("git")
     if not git:

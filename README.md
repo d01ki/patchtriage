@@ -384,6 +384,18 @@ refreshes a supported lockfile with package lifecycle scripts disabled, runs
 the checks explicitly supplied by the operator, and rescans with OSV-Scanner
 when it is available.
 
+For a local guided workflow, run the command without arguments. It walks
+through the report, local Git repository, upgrade action, verification
+commands, and output directory, shows the execution plan for confirmation,
+then prints the exact Git commands for reviewing or applying the patch:
+
+```bash
+patchtriage remediate
+```
+
+The existing `patchtriage start` wizard also offers this remediation step
+after it creates a JSON and HTML triage report.
+
 ```bash
 # 1. Produce findings and the package-level action queue.
 patchtriage run osv.json -o report.json

@@ -238,11 +238,11 @@ INDEX_HTML = r"""<!doctype html>
 </section>
 
 <input type="file" id="filepick" class="filehidden" accept=".json">
-<dialog id="repodialog"><div class="dialogbody"><h3 id="repo-title">Import a public repository</h3><p id="repo-help">PatchTriage fetches a GitHub SPDX SBOM without cloning or executing repository code. Private, SSH, and embedded-credential URLs are not accepted.</p><label class="fieldlabel">Repository URL<input type="text" id="repo-url" placeholder="https://github.com/owner/repository"></label><div class="dialogactions"><button class="btn" id="repo-cancel">Cancel</button><button class="btn primary" id="repo-import">Import evidence</button></div></div></dialog>
+<dialog id="repodialog"><div class="dialogbody"><h3 id="repo-title">Import a repository</h3><p id="repo-help">PatchTriage fetches a GitHub SPDX SBOM without cloning or executing repository code. Repository access follows the GitHub credentials configured for this deployment.</p><label class="fieldlabel">Repository URL<input type="text" id="repo-url" placeholder="https://github.com/owner/repository"></label><div class="dialogactions"><button class="btn" id="repo-cancel">Cancel</button><button class="btn primary" id="repo-import">Import evidence</button></div></div></dialog>
 <dialog id="fleetdialog"><div class="dialogbody"><h3>Import an organization</h3><p>Every recently pushed public repository of the account becomes a target with its GitHub Dependency Graph SBOM attached — the same no-clone, no-execution path as a single repository import. Forks and archived repositories are skipped. Each target starts with the official conservative SSVC defaults; review its context before trusting the decision.</p><label class="fieldlabel">Organization or user URL<input type="text" id="fleet-url" placeholder="https://github.com/your-org"></label><label class="fieldlabel">Repository limit<input type="number" id="fleet-limit" min="1" value="10"></label><div class="dialogactions"><button class="btn" id="fleet-cancel">Cancel</button><button class="btn primary" id="fleet-import">Import repositories</button></div></div></dialog>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script>
-let CFG={backends:["rules"],has_key:false};
+let CFG={backends:["rules"],has_ai:false,ai_provider:null};
 let TARGETS=[];let RESULTS=new Map();let pickTarget=null;let repoTarget=null;let editingTarget=null;let toastTimer=null;
 
 async function api(method,path,body){
@@ -263,7 +263,7 @@ function pct(value,total){return value&&total?Math.max(5,Math.round(value/total*
 
 async function loadConfig(){
   CFG=await api("GET","/api/config");
-  const labels={rules:"SSVC deterministic",claude:"SSVC + AI explanation",cascade:"SSVC + AI cascade"};
+  const labels={rules:"SSVC deterministic",ai:"SSVC + AI explanation",claude:"SSVC + AI explanation",cascade:"SSVC + AI cascade"};
   const available=CFG.backends.length?CFG.backends:["rules"];
   const backendSelect=document.getElementById("backend");
   const backendStatic=document.getElementById("backend-static");
@@ -275,12 +275,12 @@ async function loadConfig(){
   document.getElementById("privacy-note").hidden=CFG.deployment_mode!=="public";
   const generic=CFG.repository_import&&CFG.repository_import.generic_https_git==="local-osv-scanner";
   const privateGithub=Boolean(CFG.repository_import&&CFG.repository_import.github_private_with_token);
-  document.getElementById("repo-title").textContent=(generic||privateGithub)?"Import a repository":"Import a public repository";
+  document.getElementById("repo-title").textContent="Import a repository";
   document.getElementById("repo-help").textContent=generic
-    ?`GitHub uses its Dependency Graph SBOM${privateGithub?" (including repositories authorized by the local token)":""}. Other public HTTPS Git repositories are cloned into a disposable local directory and statically inspected with OSV-Scanner; repository code and package managers are never executed.`
+    ?`GitHub uses its Dependency Graph SBOM${privateGithub?" with the access granted to the local token":""}. Other HTTPS Git repositories supported by this deployment are cloned into a disposable local directory and statically inspected with OSV-Scanner; repository code and package managers are never executed.`
     :privateGithub
-      ?"GitHub repositories authorized by this local deployment's token use the Dependency Graph SPDX SBOM API without cloning or executing repository code. SSH and embedded-credential URLs are not accepted."
-      :"This deployment fetches public GitHub SPDX SBOMs through the Dependency Graph API without cloning or executing repository code. Private, SSH, and embedded-credential URLs are not accepted.";
+      ?"GitHub repositories use the access granted to this local deployment's token and the Dependency Graph SPDX SBOM API without cloning or executing repository code."
+      :"This deployment fetches GitHub SPDX SBOMs through the Dependency Graph API without cloning or executing repository code.";
 }
 async function loadTargets(){
   TARGETS=await api("GET","/api/targets");renderTargets();updateKpis();
@@ -308,7 +308,7 @@ function renderTargets(){
     const sourceName=target.source_name||target.source_format||"evidence";
     const sourceMeta=target.source_file
       ?`${esc(sourceName)} &middot; ${esc(target.source_format)} &middot; ${Math.max(1,Math.round((target.source_size||0)/1024))} KiB &middot; SHA-256 ${esc((target.source_sha256||"").slice(0,12))}`
-      :"Attach scanner JSON, CycloneDX/SPDX JSON, or import a public GitHub repository";
+      :"Attach scanner JSON, CycloneDX/SPDX JSON, or import a GitHub repository";
     return `<article class="target" data-id="${esc(target.id)}">
       <div class="targettop"><div><div class="targetname">${name}</div><div class="targetid">${esc(target.id)}</div></div></div>
       <div class="badges">${contextTags(target)}</div>
@@ -316,7 +316,7 @@ function renderTargets(){
       <div class="targetactions">
         <button class="btn small" data-action="edit">Review context</button>
         <button class="btn small attach" data-action="import" title="Upload Trivy/Grype/OSV JSON or a CycloneDX/SPDX JSON SBOM">Upload evidence</button>
-        <button class="btn small attach" data-action="repository" title="Fetch a public GitHub Dependency Graph SBOM">Import repository</button>
+        <button class="btn small attach" data-action="repository" title="Fetch a GitHub Dependency Graph SBOM">Import repository</button>
         <button class="btn small run-control" data-action="run" ${target.source_file?"":"disabled"}>Run</button>
         <button class="btn small danger" data-action="delete">Delete</button>
       </div></article>`;
@@ -532,7 +532,7 @@ document.getElementById("fleet-import").onclick=async()=>{
 document.getElementById("repo-cancel").onclick=()=>{repoTarget=null;document.getElementById("repodialog").close();};
 document.getElementById("repo-import").onclick=async()=>{
   const repositoryUrl=document.getElementById("repo-url").value.trim();
-  if(!repoTarget||!repositoryUrl){notify("Enter a public GitHub repository URL.",true);return;}
+  if(!repoTarget||!repositoryUrl){notify("Enter a GitHub repository URL.",true);return;}
   const targetId=repoTarget;
   try{
     document.getElementById("repo-import").disabled=true;notify("Fetching GitHub Dependency Graph SBOM...");

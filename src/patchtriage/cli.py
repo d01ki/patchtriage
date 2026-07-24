@@ -44,8 +44,12 @@ from .report.html import render_html
 from .ssvc import ssvc_order_key
 from .triage.audit import audit_all
 from .triage.engine import get_backend, run_triage, run_triage_batch
+from .triage.providers import has_ai_configuration
 
-app = typer.Typer(add_completion=False, help="AI-assisted patch triage pipeline")
+app = typer.Typer(
+    add_completion=False,
+    help="SSVC patch triage and verified dependency remediation",
+)
 console = Console()
 
 
@@ -68,7 +72,8 @@ def _load_config() -> None:
 
 def _pipeline(files, fmt, asset_override, inventory_path, use_nvd, nvd_api_key,
               triage_backend, model, limit, escalation_model=None, jobs=4,
-              batch=False, vendor_sources="auto", github_token=None):
+              batch=False, vendor_sources="auto", github_token=None,
+              ai_provider=None, ai_base_url=None):
     # Layer 1 - ingest
     raw = []
     for f in files:
@@ -122,11 +127,27 @@ def _pipeline(files, fmt, asset_override, inventory_path, use_nvd, nvd_api_key,
     run_triage(findings, rules_backend, jobs=1)
     ranked = sorted(findings, key=ssvc_order_key)
     subset = ranked[:limit] if limit else ranked
-    if batch and triage_backend == "claude":
-        run_triage_batch(subset, model or "claude-opus-4-8",
-                         progress=lambda msg: console.print(f"[dim]{msg}[/dim]"))
+    if batch and triage_backend in {"ai", "claude"}:
+        run_triage_batch(
+            subset,
+            model,
+            progress=lambda msg: console.print(f"[dim]{msg}[/dim]"),
+            provider=("anthropic" if triage_backend == "claude"
+                      else ai_provider),
+        )
+    elif batch:
+        raise ValueError(
+            "--batch is supported only with the 'ai' backend and the "
+            "Anthropic provider"
+        )
     elif triage_backend != "rules":
-        backend = get_backend(triage_backend, model, escalation_model)
+        backend = get_backend(
+            triage_backend,
+            model,
+            escalation_model,
+            provider=ai_provider,
+            base_url=ai_base_url,
+        )
         n_jobs = max(1, jobs)
         with console.status(f"triaging {len(subset)} findings via "
                             f"'{triage_backend}' ({n_jobs} workers)..."):
@@ -224,16 +245,22 @@ def run(
         None, envvar="GITHUB_TOKEN",
         help="Optional GitHub token (raises GHSA API rate limits)"),
     triage: Optional[str] = typer.Option(
-        None, help="Triage backend: rules|claude|cascade "
+        None, help="Triage backend: rules|ai|cascade "
                    "(default: your `patchtriage setup` choice, else rules)"),
+    provider: Optional[str] = typer.Option(
+        None, "--provider",
+        help="AI provider: anthropic|openai|openai-compatible|ollama"),
+    ai_base_url: Optional[str] = typer.Option(
+        None, "--ai-base-url",
+        help="OpenAI-compatible API base URL (for gateways/local models)"),
     model: Optional[str] = typer.Option(
-        None, help="Model id (claude: triage model; cascade: screening model)"),
+        None, help="Model id (ai: model; cascade: screening model)"),
     escalation_model: Optional[str] = typer.Option(
         None, help="cascade only: frontier model for escalated findings"),
-    jobs: int = typer.Option(4, help="Parallel API calls for claude/cascade"),
+    jobs: int = typer.Option(4, help="Parallel API calls for ai/cascade"),
     batch: bool = typer.Option(
         False, "--batch",
-        help="claude only: use the Message Batches API (50% cost, ~1h latency)"),
+        help="Anthropic AI only: use the Message Batches API"),
     output: Optional[Path] = typer.Option(None, "-o", help="Write full JSON report"),
     html: Optional[Path] = typer.Option(None, help="Write self-contained HTML dashboard"),
     limit: Optional[int] = typer.Option(
@@ -259,8 +286,89 @@ def run(
         files, fmt, override, assets, not no_nvd, nvd_api_key, triage, model,
         limit, escalation_model=escalation_model, jobs=jobs, batch=batch,
         vendor_sources=None if no_vendor_advisories else vendor_sources,
-        github_token=github_token or os.environ.get("GH_TOKEN"))
+        github_token=github_token or os.environ.get("GH_TOKEN"),
+        ai_provider=provider, ai_base_url=ai_base_url)
     _emit(findings, subset, actions, eval_rows, output, html)
+
+
+@app.command()
+def remediate(
+    report: Path = typer.Argument(
+        ..., exists=True, dir_okay=False,
+        help="PatchTriage JSON report produced by `patchtriage run -o`",
+    ),
+    repository: Path = typer.Option(
+        ..., "--repository", "-r", exists=True, file_okay=False,
+        help="Local Git working tree to patch from its committed HEAD",
+    ),
+    output_dir: Path = typer.Option(
+        Path("patchtriage-remediation"), "--output-dir", "-o",
+        help="Empty/absent directory for the isolated workspace and artifacts",
+    ),
+    action_id: Optional[str] = typer.Option(
+        None, "--action-id",
+        help="Upgrade action to apply (default: highest-priority upgrade)",
+    ),
+    check: Optional[list[str]] = typer.Option(
+        None, "--check",
+        help="Verification command; repeat for multiple commands",
+    ),
+    no_lock: bool = typer.Option(
+        False, "--no-lock", help="Do not refresh a detected supported lockfile",
+    ),
+    no_scan: bool = typer.Option(
+        False, "--no-scan", help="Do not rescan the patched workspace",
+    ),
+    scanner: Optional[str] = typer.Option(
+        None, "--scanner",
+        help="OSV-Scanner executable path (auto-detected by default)",
+    ),
+    timeout: int = typer.Option(
+        600, min=1, help="Per-command timeout in seconds",
+    ),
+):
+    """Create and verify one dependency patch in an isolated local clone.
+
+    The source checkout is never modified. The result directory contains a
+    reviewable Git workspace, `remediation.patch`, `remediation.json`, and an
+    OSV-Scanner result when the scanner is available. Nothing is pushed,
+    merged, or deployed.
+    """
+    from .remediation import RemediationError, execute_remediation
+
+    try:
+        result = execute_remediation(
+            report,
+            repository,
+            output_dir,
+            action_id=action_id,
+            checks=check or (),
+            refresh_lockfiles=not no_lock,
+            rescan=not no_scan,
+            scanner_binary=scanner,
+            timeout=timeout,
+        )
+    except RemediationError as exc:
+        console.print(f"[red]remediation failed:[/red] {exc}")
+        raise typer.Exit(code=1)
+
+    style = "green" if result.status == "verified" else "yellow"
+    console.print(
+        f"[{style}]remediation: {result.status}[/{style}]\n"
+        f"  action:    {result.action.summary}\n"
+        f"  workspace: {result.workspace}\n"
+        f"  patch:     {result.patch_file}\n"
+        f"  files:     {', '.join(result.changed_files)}"
+    )
+    for warning in result.warnings:
+        console.print(f"[yellow]warning:[/yellow] {warning}")
+    if result.scan.remaining_cves:
+        console.print(
+            "[red]remaining target CVEs:[/red] "
+            + ", ".join(result.scan.remaining_cves)
+        )
+    if result.status == "verification_failed":
+        raise typer.Exit(code=2)
 
 
 @app.command()
@@ -275,31 +383,116 @@ def setup():
     # Windows' getpass, so fall back to visible input there.
     hidden = sys.stdin.isatty()
 
-    # 1. Anthropic API key (enables the claude/cascade backends)
-    current = cfg.get("ANTHROPIC_API_KEY", "")
-    label = "Anthropic API key (sk-ant-...)"
-    if current:
-        label += f" [current: {cfgmod.mask(current)}]"
+    # 1. Optional AI provider. Provider-specific credentials remain separate
+    # so switching providers never silently sends evidence to another service.
+    current_provider = str(cfg.get("PATCHTRIAGE_AI_PROVIDER") or "").lower()
+    if not current_provider:
+        if cfg.get("ANTHROPIC_API_KEY"):
+            current_provider = "anthropic"
+        elif cfg.get("OPENAI_API_KEY"):
+            current_provider = "openai"
+        else:
+            current_provider = "rules"
+    provider_choices = [
+        "rules", "anthropic", "openai", "openai-compatible", "ollama",
+    ]
     while True:
-        key = typer.prompt(label, default="", show_default=False,
-                           hide_input=hidden).strip()
-        if not key:
-            key = current
+        selected_provider = typer.prompt(
+            f"AI provider {provider_choices}",
+            default=current_provider,
+        ).strip().lower()
+        if selected_provider in provider_choices:
+            break
+        console.print(f"[red]pick one of {provider_choices}[/red]")
+
+    has_ai = selected_provider != "rules"
+    if has_ai:
+        cfg["PATCHTRIAGE_AI_PROVIDER"] = selected_provider
+    else:
+        cfg.pop("PATCHTRIAGE_AI_PROVIDER", None)
+
+    if selected_provider == "anthropic":
+        current = cfg.get("ANTHROPIC_API_KEY", "")
+        label = "Anthropic API key (sk-ant-...)"
+        if current:
+            label += f" [current: {cfgmod.mask(current)}]"
+        while True:
+            key = typer.prompt(
+                label, default="", show_default=False, hide_input=hidden
+            ).strip() or current
             if not key:
-                console.print("[dim]skipped - the deterministic 'rules' "
-                              "backend needs no key[/dim]")
-            break
-        with console.status("validating key against the Anthropic API..."):
-            ok, msg = cfgmod.validate_anthropic_key(key)
-        if ok:
-            console.print(f"[green]OK: {msg}[/green]")
-            break
-        console.print(f"[red]{msg}[/red]")
-        if not typer.confirm("Try again?", default=True):
-            key = current
-            break
-    if key:
-        cfg["ANTHROPIC_API_KEY"] = key
+                has_ai = False
+                console.print("[dim]no key saved; using deterministic rules[/dim]")
+                break
+            with console.status("validating key against the Anthropic API..."):
+                ok, msg = cfgmod.validate_anthropic_key(key)
+            if ok:
+                console.print(f"[green]OK: {msg}[/green]")
+                cfg["ANTHROPIC_API_KEY"] = key
+                break
+            console.print(f"[red]{msg}[/red]")
+            if not typer.confirm("Try again?", default=True):
+                has_ai = bool(current)
+                break
+    elif selected_provider == "openai":
+        current = cfg.get("OPENAI_API_KEY", "")
+        label = "OpenAI API key"
+        if current:
+            label += f" [current: {cfgmod.mask(current)}]"
+        while True:
+            key = typer.prompt(
+                label, default="", show_default=False, hide_input=hidden
+            ).strip() or current
+            if not key:
+                has_ai = False
+                console.print("[dim]no key saved; using deterministic rules[/dim]")
+                break
+            with console.status("validating key against the OpenAI API..."):
+                ok, msg = cfgmod.validate_openai_key(key)
+            if ok:
+                console.print(f"[green]OK: {msg}[/green]")
+                cfg["OPENAI_API_KEY"] = key
+                break
+            console.print(f"[red]{msg}[/red]")
+            if not typer.confirm("Try again?", default=True):
+                has_ai = bool(current)
+                break
+    elif selected_provider in {"openai-compatible", "ollama"}:
+        default_url = (
+            "http://localhost:11434/v1"
+            if selected_provider == "ollama"
+            else cfg.get("PATCHTRIAGE_AI_BASE_URL", "")
+        )
+        base_url = typer.prompt(
+            "OpenAI-compatible API base URL", default=default_url
+        ).strip()
+        if not base_url:
+            has_ai = False
+            console.print("[dim]no base URL saved; using deterministic rules[/dim]")
+        else:
+            cfg["PATCHTRIAGE_AI_BASE_URL"] = base_url
+        current = cfg.get("PATCHTRIAGE_AI_API_KEY", "")
+        label = "Provider API key (Enter if the local endpoint needs no key)"
+        if current:
+            label += f" [current: {cfgmod.mask(current)}]"
+        key = typer.prompt(
+            label, default="", show_default=False, hide_input=hidden
+        ).strip()
+        if key:
+            cfg["PATCHTRIAGE_AI_API_KEY"] = key
+
+    if has_ai and selected_provider != "anthropic":
+        model = typer.prompt(
+            "AI model id",
+            default=cfg.get("PATCHTRIAGE_AI_MODEL", ""),
+        ).strip()
+        if model:
+            cfg["PATCHTRIAGE_AI_MODEL"] = model
+        else:
+            has_ai = False
+            console.print("[dim]no model saved; using deterministic rules[/dim]")
+    if not has_ai:
+        cfg.pop("PATCHTRIAGE_AI_PROVIDER", None)
 
     # 2. NVD API key (optional - only raises NVD rate limits)
     current_nvd = cfg.get("NVD_API_KEY", "")
@@ -322,11 +515,12 @@ def setup():
         cfg["GITHUB_TOKEN"] = github
 
     # 4. Default triage backend
-    has_key = bool(cfg.get("ANTHROPIC_API_KEY"))
-    choices = ["rules", "claude", "cascade"] if has_key else ["rules"]
+    choices = ["rules", "ai", "cascade"] if has_ai else ["rules"]
     default_backend = cfg.get("default_backend",
-                              "cascade" if has_key else "rules")
-    if has_key:
+                              "cascade" if has_ai else "rules")
+    if default_backend == "claude":
+        default_backend = "ai"
+    if has_ai:
         while True:
             backend = typer.prompt(
                 f"Default triage backend {choices} - cascade screens with a "
@@ -427,13 +621,15 @@ def start():
 
     # 3. triage backend
     console.print("\n[bold]3. Triage backend[/bold]")
-    has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    choices = ["rules", "claude", "cascade"] if has_key else ["rules"]
-    if not has_key:
-        console.print("[dim]no Anthropic key configured - run "
-                      "`patchtriage setup` to enable claude/cascade[/dim]")
+    has_ai = has_ai_configuration()
+    choices = ["rules", "ai", "cascade"] if has_ai else ["rules"]
+    if not has_ai:
+        console.print("[dim]no complete AI provider configuration - run "
+                      "`patchtriage setup` to enable ai/cascade[/dim]")
     default_backend = cfg.get("default_backend",
-                              "cascade" if has_key else "rules")
+                              "cascade" if has_ai else "rules")
+    if default_backend == "claude":
+        default_backend = "ai"
     if default_backend not in choices:
         default_backend = choices[0]
     while True:
@@ -596,8 +792,8 @@ def demo(
         shutil.rmtree(tmp, ignore_errors=True)
     console.print("\n[bold green]Demo complete.[/bold green] Open "
                   f"[bold]{html}[/bold] in a browser. To try the AI backend: "
-                  "export ANTHROPIC_API_KEY=... and re-run with "
-                  "`patchtriage run ... --triage claude`.")
+                  "configure a provider with `patchtriage setup` and re-run "
+                  "with `patchtriage run ... --triage ai`.")
 
 
 @app.command()

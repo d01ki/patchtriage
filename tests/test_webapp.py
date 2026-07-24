@@ -34,7 +34,17 @@ def _free_port():
 @pytest.fixture()
 def server(tmp_path, monkeypatch):
     monkeypatch.setenv("PATCHTRIAGE_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for key in (
+        "PATCHTRIAGE_AI_PROVIDER",
+        "PATCHTRIAGE_AI_API_KEY",
+        "PATCHTRIAGE_AI_BASE_URL",
+        "PATCHTRIAGE_AI_MODEL",
+        "PATCHTRIAGE_AI_SCREEN_MODEL",
+        "PATCHTRIAGE_AI_DEEP_MODEL",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     port = _free_port()
@@ -83,6 +93,17 @@ def test_config_lists_rules_backend(server):
     assert "ssvc-deployer" in cfg["capabilities"]
     assert "kev-baseline" in cfg["capabilities"]
     assert "vendor-advisories" in cfg["capabilities"]
+
+
+def test_config_lists_provider_neutral_ai_backends(
+        server, monkeypatch):
+    monkeypatch.setenv("PATCHTRIAGE_AI_PROVIDER", "ollama")
+    monkeypatch.setenv("PATCHTRIAGE_AI_MODEL", "local-security-model")
+    status, cfg = _req("GET", server + "/api/config")
+    assert status == 200
+    assert cfg["backends"] == ["rules", "ai", "cascade"]
+    assert cfg["has_ai"] is True
+    assert cfg["ai_provider"] == "openai-compatible"
     assert cfg["data_isolation"] == "anonymous-session"
     assert cfg["retention_hours"] == 6
     assert cfg["connectors"] == {
